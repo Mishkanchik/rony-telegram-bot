@@ -362,8 +362,7 @@ function getMainKeyboard($chatId = null) {
                 ['text' => '⚙️ Живлення', 'callback_data' => 'menu_power']
             ],
             [
-                ['text' => '🔊 Пристрої звуку', 'callback_data' => 'menu_audio'],
-                ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
+                ['text' => '🔊 Пристрої звуку', 'callback_data' => 'menu_audio']
             ],
             [
                 ['text' => '🌐 Мережа & Інфо', 'callback_data' => 'menu_net'],
@@ -738,6 +737,7 @@ if (isset($_POST['agent_result'])) {
                 . "───────────────────────────\n"
                 . "⏱️ Оновлено: `" . date('H:i:s') . "`";
             
+            // Delete old text/photo menu message so new screenshot replaces it cleanly!
             $oldMenuId = getLastMenuId($chatId);
             deleteMessageSafely($chatId, $oldMenuId);
             if ($targetMsgId && $targetMsgId != $oldMenuId) {
@@ -749,6 +749,7 @@ if (isset($_POST['agent_result'])) {
                 setLastMenuId($chatId, $res['result']['message_id']);
             }
         } else if ($text && strpos($text, '📊') === 0) {
+            // Edit status into current menu message
             $oldMenuId = getLastMenuId($chatId);
             editOrSendMessage($chatId, $oldMenuId, $text, getMainKeyboard($chatId));
         }
@@ -780,6 +781,8 @@ function handleUpdate($update) {
             return;
         }
 
+        // Режим пошуку: лише ОДНЕ наступне текстове повідомлення після кнопки 🔍
+        // Команди бота (/start тощо) не вважаються пошуковим запитом
         if (getSearchState($chatId)) {
             if ($text !== '' && strpos($text, '/') !== 0) {
                 setSearchState($chatId, false);
@@ -788,12 +791,17 @@ function handleUpdate($update) {
                     'query' => $text,
                     'open_first_result' => true
                 ]);
+
                 $oldMenuId = getLastMenuId($chatId);
-                editOrSendMessage($chatId, $oldMenuId,
+                editOrSendMessage(
+                    $chatId,
+                    $oldMenuId,
                     "🔍 *Пошук у браузері:*\nНадіслано запит: `{$text}`\nВідкриваю перший не рекламний результат...",
-                    getBrowserKeyboard());
+                    getBrowserKeyboard()
+                );
                 return;
             }
+            // Якщо надіслали команду — виходимо з режиму пошуку і обробляємо далі
             setSearchState($chatId, false);
         }
 
@@ -876,6 +884,7 @@ function handleUpdate($update) {
                 . "📡 *Статус:* {$statusStr}\n"
                 . "───────────────────────────\n"
                 . "Виберіть опцію з меню нижче:";
+
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $caption, getMainKeyboard($chatId));
         } elseif ($data === 'menu_select_pc') {
@@ -884,10 +893,10 @@ function handleUpdate($update) {
             $pcs = getPcsData();
             $currentPcId = getSelectedPcId($chatId);
             $currentPcName = $pcs[$currentPcId]['name'] ?? $currentPcId;
-            $text = "🖥️ *СПИСОК ПІДКЛЮЧЕНИХ ПК*\n"
+            $text = "🖥️ *СПИСОК ПІДКТЮЧЕНИХ ПК*\n"
                   . "───────────────────────────\n"
                   . "Поточний обраний ПК: *{$currentPcName}*\n\n"
-                  . "Виберіть комп'ютер зі списку нижче:";
+                  . "Виберіть комп'ютер зі списку нижче для керування ним або додайте новий ПК:";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
         } elseif (strpos($data, 'select_pc_') === 0) {
@@ -896,7 +905,10 @@ function handleUpdate($update) {
             $pcs = getPcsData();
             $targetName = $pcs[$targetPcId]['name'] ?? $targetPcId;
             logAction($userId, $username, "Switched active PC to: $targetPcId");
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "✅ Обрано ПК: {$targetName}"]);
+            telegramApi('answerCallbackQuery', [
+                'callback_query_id' => $cb['id'],
+                'text' => "✅ Обрано ПК: {$targetName}"
+            ]);
             $st = getSinglePcStatus($targetPcId);
             $statusStr = $st['online'] ? "🟢 *ПК Онлайн*" : "🔴 *ПК Офлайн*";
             $caption = "⚡ *RONY PC CONTROL CENTER* ⚡\n"
@@ -904,125 +916,226 @@ function handleUpdate($update) {
                 . "🖥️ *Комп'ютер:* {$st['name']}\n"
                 . "📡 *Статус:* {$statusStr}\n"
                 . "───────────────────────────\n"
-                . "Ви обрали `{$st['name']}`.";
+                . "Ви обрали `{$st['name']}`. Всі наступні команди будуть відправлятися на цей ПК.";
             editOrSendMessage($chatId, $msgId, $caption, getMainKeyboard($chatId));
         } elseif (strpos($data, 'delete_pc_ask_') === 0) {
             $targetPcId = str_replace('delete_pc_ask_', '', $data);
             $pcs = getPcsData();
             $targetName = $pcs[$targetPcId]['name'] ?? $targetPcId;
+            logAction($userId, $username, "Requested deletion of PC: $targetPcId");
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            $text = "⚠️ *ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ПК*\n───────────────────────────\nВи впевнені, що хочете видалити ПК *{$targetName}*?";
-            $keyboard = ['inline_keyboard' => [
-                [['text' => "✅ Так, видалити", 'callback_data' => "delete_pc_confirm_{$targetPcId}"]],
-                [['text' => "❌ Скасувати", 'callback_data' => 'menu_select_pc']]
-            ]];
+            $text = "⚠️ *ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ПК*\n"
+                  . "───────────────────────────\n"
+                  . "Ви впевнені, що хочете видалити ПК *{$targetName}* зі списку?\n\n"
+                  . "⚠️ *Зверніть увагу:* Якщо на цьому ПК запущено `agent.py`, він знову з'явиться у списку при наступному опитуванні.";
+            $keyboard = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => "✅ Так, видалити {$targetName}", 'callback_data' => "delete_pc_confirm_{$targetPcId}"],
+                    ],
+                    [
+                        ['text' => "❌ Скасувати", 'callback_data' => 'menu_select_pc']
+                    ]
+                ]
+            ];
             editOrSendMessage($chatId, $msgId, $text, $keyboard);
         } elseif (strpos($data, 'delete_pc_confirm_') === 0) {
             $targetPcId = str_replace('delete_pc_confirm_', '', $data);
             $pcs = getPcsData();
             $targetName = $pcs[$targetPcId]['name'] ?? $targetPcId;
             deletePcData($targetPcId);
-            logAction($userId, $username, "Deleted PC: $targetPcId");
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "🗑️ ПК {$targetName} видалено"]);
-            editOrSendMessage($chatId, $msgId, "🗑️ ПК *{$targetName}* видалено.", getPcsListKeyboard());
+            logAction($userId, $username, "Deleted PC: $targetPcId ($targetName)");
+            telegramApi('answerCallbackQuery', [
+                'callback_query_id' => $cb['id'],
+                'text' => "🗑️ ПК {$targetName} видалено зі списку"
+            ]);
+            $text = "🗑️ ПК *{$targetName}* успішно видалено зі списку.\n\nОберіть ПК зі списку нижче:";
+            editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
         } elseif ($data === 'add_pc_prompt') {
+            logAction($userId, $username, "Requested Add PC Instructions");
             $newPcId = 'pc_' . substr(md5(uniqid(mt_rand(), true)), 0, 6);
-            $text = "➕ *ЯК ДОДАТИ НОВИЙ ПК*\n───────────────────────────\n"
-                  . "1️⃣ Скопіюйте `pc_agent` на новий ПК\n"
-                  . "2️⃣ Вкажіть у `agent.py`:\n```\nPC_ID = \"{$newPcId}\"\nPC_NAME = \"Новий ПК\"\n```\n"
-                  . "3️⃣ Запустіть `run_agent.bat`";
+            $text = "➕ *ЯК ДОДАТИ НОВИЙ ПК ДО БОТА*\n"
+                  . "───────────────────────────\n"
+                  . "1️⃣ Скопіюйте папку `pc_agent` або завантажте `agent.py` на новий ПК.\n"
+                  . "2️⃣ Відкрийте `agent.py` у текстовому редакторі.\n"
+                  . "3️⃣ Вкажіть наступні значення на початку файлу:\n\n"
+                  . "```python\n"
+                  . "PC_ID = \"{$newPcId}\"\n"
+                  . "PC_NAME = \"Новий ПК\"\n"
+                  . "```\n\n"
+                  . "4️⃣ Запустіть `run_agent.bat` на новому ПК.\n"
+                  . "5️⃣ Бот *автоматично виявить новий ПК* та долучить його до вашого списку!";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
         } elseif (strpos($data, 'menu_processes') === 0) {
             $page = 1;
-            if (strpos($data, 'menu_processes_') === 0) $page = (int)str_replace('menu_processes_', '', $data);
-            logAction($userId, $username, "Checked Processes (Page: $page)");
+            if (strpos($data, 'menu_processes_') === 0) {
+                $page = (int)str_replace('menu_processes_', '', $data);
+            }
+            logAction($userId, $username, "Checked Active Processes (Page: $page)");
             setSearchState($chatId, false);
             $pcId = getSelectedPcId($chatId);
             $st = getSinglePcStatus($pcId);
             if ($st['online']) {
                 addCommandToQueue('get_processes', $chatId, ['msg_id' => $msgId, 'page' => $page]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Отримую список процесів...']);
-                editOrSendMessage($chatId, $msgId, "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n───────────────────────────\n⏳ *Завантаження...*", getMainKeyboard($chatId));
+                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Отримую список активних процесів...']);
+                $loadingText = "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n"
+                    . "───────────────────────────\n"
+                    . "⏳ *Завантаження списку задач...*\n"
+                    . "Зачекайте 1-2 секунди, агент опитує ПК.";
+                editOrSendMessage($chatId, $msgId, $loadingText, getMainKeyboard($chatId));
             } else {
+                $statusText = "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n"
+                    . "───────────────────────────\n"
+                    . "🔴 *Статус:* ПК вимкнено або агент офлайн\n"
+                    . "⏱️ *Востаннє у мережі:* `" . $st['last_seen_date'] . "`\n";
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-                editOrSendMessage($chatId, $msgId, "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n🔴 ПК офлайн\n⏱️ `" . $st['last_seen_date'] . "`", getMainKeyboard($chatId));
+                editOrSendMessage($chatId, $msgId, $statusText, getMainKeyboard($chatId));
             }
         } elseif (strpos($data, 'kill_proc_') === 0) {
             $parts = explode('_', str_replace('kill_proc_', '', $data));
             $pid = (int)$parts[0];
             $page = isset($parts[1]) ? (int)$parts[1] : 1;
-            logAction($userId, $username, "Kill PID: $pid");
+            logAction($userId, $username, "Kill process PID: $pid");
             addCommandToQueue('kill_app', $chatId, ['pid' => $pid, 'msg_id' => $msgId, 'page' => $page]);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "❌ Закриваю PID {$pid}..."]);
+            telegramApi('answerCallbackQuery', [
+                'callback_query_id' => $cb['id'],
+                'text' => "❌ Закриваю PID {$pid}..."
+            ]);
+            $loadingText = "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n"
+                . "───────────────────────────\n"
+                . "⏳ *Закриваю процес (PID: {$pid})...*\n"
+                . "Зачекайте, список оновлюється...";
+            editOrSendMessage($chatId, $msgId, $loadingText, getMainKeyboard($chatId));
         } elseif ($data === 'menu_browser') {
+            logAction($userId, $username, "Navigated Browser Menu");
             setSearchState($chatId, false);
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "🌐 *КЕРУВАННЯ ВКЛАДКАМИ БРАУЗЕРА*", getBrowserKeyboard());
+            editOrSendMessage($chatId, $msgId, "🌐 *КЕРУВАННЯ ВКЛАДКАМИ БРАУЗЕРА*\n\nКерує активним вікном Comet/Chrome (Ctrl+Tab / Ctrl+T / Ctrl+W).", getBrowserKeyboard());
         } elseif ($data === 'browser_prev_tab') {
+            logAction($userId, $username, "Browser prev tab");
+            setSearchState($chatId, false);
             addCommandToQueue('browser_tab', $chatId, ['action' => 'prev']);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⬅️ Вкладка вліво']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⬅️ Вкладка вліво (Ctrl+Shift+Tab)']);
         } elseif ($data === 'browser_next_tab') {
+            logAction($userId, $username, "Browser next tab");
+            setSearchState($chatId, false);
             addCommandToQueue('browser_tab', $chatId, ['action' => 'next']);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '➡️ Вкладка вправо']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '➡️ Вкладка вправо (Ctrl+Tab)']);
         } elseif ($data === 'browser_new_tab') {
+            logAction($userId, $username, "Browser new tab");
+            setSearchState($chatId, false);
             addCommandToQueue('browser_tab', $chatId, ['action' => 'new']);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '➕ Нова вкладка']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '➕ Нова вкладка (Ctrl+T)']);
         } elseif ($data === 'browser_close_tab') {
+            logAction($userId, $username, "Browser close tab");
+            setSearchState($chatId, false);
             addCommandToQueue('browser_tab', $chatId, ['action' => 'close']);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '❌ Закрити вкладку']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '❌ Закрити вкладку (Ctrl+W)']);
         } elseif ($data === 'browser_search_prompt') {
+            logAction($userId, $username, "Activated Search Prompt");
             setSearchState($chatId, true);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔍 Надішліть запит у чат']);
-            editOrSendMessage($chatId, $msgId, "🔍 *ПОШУК У БРАУЗЕРІ*\n\nНапишіть пошуковий запит одним повідомленням.", getBrowserKeyboard());
+            telegramApi('answerCallbackQuery', [
+                'callback_query_id' => $cb['id'],
+                'text' => '🔍 Надішліть ОДИН текстовий запит у чат'
+            ]);
+            editOrSendMessage(
+                $chatId,
+                $msgId,
+                "🔍 *ПОШУК У БРАУЗЕРІ*\n\n"
+                . "Напишіть *одним повідомленням* пошуковий запит.\n"
+                . "Бот відкриє його в Comet і перейде на перший нерекламний результат.\n\n"
+                . "⚠️ Наступні повідомлення *не* підуть у пошук — натисніть 🔍 ще раз.",
+                getBrowserKeyboard()
+            );
         } elseif ($data === 'menu_power') {
             setSearchState($chatId, false);
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, "⚡ *КЕРУВАННЯ ЖИВЛЕННЯМ ПК*", getPowerKeyboard());
         } elseif ($data === 'menu_audio') {
+            logAction($userId, $username, "Opened Audio Devices Menu");
             setSearchState($chatId, false);
             $pcId = getSelectedPcId($chatId);
             $st = getSinglePcStatus($pcId);
             if ($st['online']) {
                 addCommandToQueue('get_audio_devices', $chatId, ['msg_id' => $msgId]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Отримую пристрої звуку...']);
-                editOrSendMessage($chatId, $msgId, "🔊 *ПРИСТРОЇ ЗВУКУ*\n⏳ Завантаження...", [
-                    'inline_keyboard' => [[['text' => '🔄 Оновити', 'callback_data' => 'menu_audio'], ['text' => '« Меню', 'callback_data' => 'menu_main']]]
+                telegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $cb['id'],
+                    'text' => '⏳ Отримую пристрої звуку...'
                 ]);
+                $loadingText = "🔊 *ПРИСТРОЇ ВИВЕДЕННЯ ЗВУКУ*\n"
+                    . "───────────────────────────\n"
+                    . "⏳ *Завантаження списку пристроїв...*\n"
+                    . "Зачекайте 1-2 секунди.";
+                $loadingKb = [
+                    'inline_keyboard' => [
+                        [
+                            ['text' => '🔄 Оновити', 'callback_data' => 'menu_audio'],
+                            ['text' => '« Головне меню', 'callback_data' => 'menu_main']
+                        ]
+                    ]
+                ];
+                editOrSendMessage($chatId, $msgId, $loadingText, $loadingKb);
             } else {
+                $statusText = "🔊 *ПРИСТРОЇ ВИВЕДЕННЯ ЗВУКУ*\n"
+                    . "───────────────────────────\n"
+                    . "🔴 *Статус:* ПК вимкнено або агент офлайн\n"
+                    . "⏱️ *Востаннє у мережі:* `" . $st['last_seen_date'] . "`\n";
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-                editOrSendMessage($chatId, $msgId, "🔊 *ПРИСТРОЇ ЗВУКУ*\n🔴 ПК офлайн", getMainKeyboard($chatId));
+                editOrSendMessage($chatId, $msgId, $statusText, getMainKeyboard($chatId));
             }
         } elseif (strpos($data, 'select_audio_') === 0) {
             $deviceIndex = (int)str_replace('select_audio_', '', $data);
+            logAction($userId, $username, "Switch audio device index: $deviceIndex");
+            setSearchState($chatId, false);
             $pcId = getSelectedPcId($chatId);
             $st = getSinglePcStatus($pcId);
             if ($st['online']) {
-                addCommandToQueue('set_audio_device', $chatId, ['device_index' => $deviceIndex, 'msg_id' => $msgId]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "✅ Перемикаю пристрій #{$deviceIndex}..."]);
+                addCommandToQueue('set_audio_device', $chatId, [
+                    'device_index' => $deviceIndex,
+                    'msg_id' => $msgId
+                ]);
+                telegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $cb['id'],
+                    'text' => "✅ Перемикаю пристрій #{$deviceIndex}..."
+                ]);
             } else {
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔴 ПК офлайн']);
+                telegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $cb['id'],
+                    'text' => '🔴 ПК офлайн'
+                ]);
             }
         } elseif ($data === 'power_wol' || $data === 'turn_on_pc') {
-            logAction($userId, $username, "Sent WOL");
+            logAction($userId, $username, "Sent Wake-On-LAN packet");
+            $wol_url = "https://driver.lutsk.ua/img/bot/newfix/wol.php?mac=" . urlencode($PC_MAC) . "&ip=" . urlencode($PUBLIC_IP);
+            @file_get_contents($wol_url);
             $targetIp = $PUBLIC_IP ?: '255.255.255.255';
             sendWakeOnLan($PC_MAC, $targetIp, $PC_PORT);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⚡ WOL надіслано!']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⚡ Сигнал Wake-on-LAN надіслано на ваш ПК!']);
         } elseif ($data === 'power_shutdown') {
+            logAction($userId, $username, "Shutdown command");
             addCommandToQueue('shutdown', $chatId);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔴 Вимкнення ПК...']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔴 Команду вимкнення ПК надіслано.']);
         } elseif ($data === 'power_sleep') {
+            logAction($userId, $username, "Sleep command");
             addCommandToQueue('sleep', $chatId);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🌙 Режим сну...']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🌙 ПК переводиться у режим сну.']);
+        } elseif ($data === 'power_hibernate') {
+            logAction($userId, $username, "Hibernate command");
+            addCommandToQueue('hibernate', $chatId);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '❄️ ПК переводиться у режим гібернації.']);
         } elseif ($data === 'power_reboot') {
+            logAction($userId, $username, "Reboot command");
             addCommandToQueue('reboot', $chatId);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔄 Перезавантаження...']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔄 ПК перезавантажується.']);
         } elseif ($data === 'power_lock') {
+            logAction($userId, $username, "Lock screen");
             addCommandToQueue('lock', $chatId);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔒 Екран заблоковано']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔒 Екран заблоковано.']);
         } elseif ($data === 'power_unlock') {
+            logAction($userId, $username, "Unlock screen");
             addCommandToQueue('unlock', $chatId);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔑 Екран розблоковано']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🔑 Екран розблоковано!']);
         } elseif ($data === 'menu_status') {
             logAction($userId, $username, "Checked Status");
             $pcId = getSelectedPcId($chatId);
@@ -1031,26 +1144,42 @@ function handleUpdate($update) {
                 addCommandToQueue('status', $chatId);
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Оновлюю стан ПК...']);
             } else {
+                $statusText = "📊 *СТАН ПК*\n"
+                    . "───────────────────────────\n"
+                    . "🔴 *Статус:* ПК вимкнено або агент офлайн\n"
+                    . "⏱️ *Востаннє у мережі:* `" . $st['last_seen_date'] . "`\n"
+                    . "💡 *Порада:* Натисніть *'⚡ Увімкнути ПК (Wake-on-LAN)'* у меню живлення.";
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-                editOrSendMessage($chatId, $msgId, "📊 *СТАН ПК*\n🔴 ПК офлайн\n⏱️ `" . $st['last_seen_date'] . "`", getMainKeyboard($chatId));
+                editOrSendMessage($chatId, $msgId, $statusText, getMainKeyboard($chatId));
             }
         } elseif ($data === 'menu_apps') {
             setSearchState($chatId, false);
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "🚀 *ЗАПУСК ПРОГРАМ НА ПК*", getAppsKeyboard());
+            editOrSendMessage($chatId, $msgId, "🚀 *ЗАПУСК ПРОГРАМ НА ПК*\n\nЯкщо програма вже відкрита — лише фокус вікна (без нового екземпляра).", getAppsKeyboard());
         } elseif (strpos($data, 'app_') === 0) {
             setSearchState($chatId, false);
             $appName = str_replace('app_', '', $data);
             logAction($userId, $username, "Launched app: $appName");
             if ($appName === 'ytmusic') {
-                addCommandToQueue('open_app', $chatId, ['app' => $appName, 'yt_url' => $YT_MUSIC_URL]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🎧 Відкриваю YouTube Music']);
-            } elseif ($appName === 'telegram') {
-                addCommandToQueue('open_app', $chatId, ['app' => 'telegram', 'focus_only' => true]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '✈️ Відкриваю Telegram Desktop']);
+                // Simply open YouTube Music in a new tab (no search for existing tabs)
+                addCommandToQueue('open_app', $chatId, [
+                    'app' => $appName,
+                    'yt_url' => $YT_MUSIC_URL
+                ]);
+                telegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $cb['id'],
+                    'text' => '🎧 Відкриваю YouTube Music'
+                ]);
             } else {
-                addCommandToQueue('open_app', $chatId, ['app' => $appName, 'yt_url' => $YT_MUSIC_URL, 'focus_only' => true]);
-                telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "🚀 Фокус/запуск: $appName"]);
+                addCommandToQueue('open_app', $chatId, [
+                    'app' => $appName,
+                    'yt_url' => $YT_MUSIC_URL,
+                    'focus_only' => true
+                ]);
+                telegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $cb['id'],
+                    'text' => "🚀 Фокус/запуск: $appName"
+                ]);
             }
         } elseif ($data === 'menu_music') {
             setSearchState($chatId, false);
@@ -1062,44 +1191,48 @@ function handleUpdate($update) {
             editOrSendMessage($chatId, $msgId, "🎬 *МЕНЮ ФІЛЬМІВ ТА СЕРІАЛІВ*", getMoviesKeyboard());
         } elseif (strpos($data, 'media_') === 0) {
             $act = str_replace('media_', '', $data);
-            logAction($userId, $username, "Media: $act");
+            logAction($userId, $username, "Media action: $act");
             addCommandToQueue('media', $chatId, ['action' => $act]);
+            
             $toastText = "Натиснуто: $act";
-            if ($act === 'play') $toastText = "⏯️ Пауза / Плей";
-            elseif ($act === 'music_play') $toastText = "⏯️ Музика: Пауза / Плей";
-            elseif ($act === 'music_prev') $toastText = "⏮️ Попередній трек";
-            elseif ($act === 'music_next') $toastText = "⏭️ Наступний трек";
+            if ($act === 'rewind') $toastText = "⏪ Перемотка назад (5 сек)";
+            elseif ($act === 'forward') $toastText = "⏩ Перемотка вперед (5 сек)";
+            elseif ($act === 'play') $toastText = "⏯️ Пауза / Плей";
+            elseif ($act === 'music_play') $toastText = "⏯️ Пауза / Плей (Музика)";
+            elseif ($act === 'music_prev') $toastText = "⏮️ Попередній трек (Музика)";
+            elseif ($act === 'music_next') $toastText = "⏭️ Наступний трек (Музика)";
             elseif ($act === 'vup') $toastText = "🔊 Гучність +10%";
             elseif ($act === 'vdown') $toastText = "🔉 Гучність -10%";
             elseif ($act === 'mute') $toastText = "🔇 Без звуку";
-            elseif ($act === 'rewind') $toastText = "⏪ Перемотка назад";
-            elseif ($act === 'forward') $toastText = "⏩ Перемотка вперед";
-            elseif ($act === 'fullscreen') $toastText = "🖥️ Повний екран";
+            elseif ($act === 'prev') $toastText = "⏮️ Попередній трек";
+            elseif ($act === 'next') $toastText = "⏭️ Наступний трек";
+            elseif ($act === 'fullscreen') $toastText = "🖥️ Повний екран (F)";
             elseif ($act === 'scroll_up') $toastText = "🔼 Скрол вгору";
             elseif ($act === 'scroll_down') $toastText = "🔽 Скрол вниз";
+
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => $toastText]);
         } elseif ($data === 'menu_screenshot') {
             logAction($userId, $username, "Requested Screenshot");
             addCommandToQueue('screenshot', $chatId, ['msg_id' => $msgId]);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '📸 Скріншот...']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '📸 Робиться скріншот екрана...']);
         } elseif ($data === 'menu_net') {
             logAction($userId, $username, "Checked Network Info");
             $pcId = getSelectedPcId($chatId);
             $st = getSinglePcStatus($pcId);
-            $netInfo = "🌐 *МЕРЕЖЕВА ІНФОРМАЦІЯ*\n───────────────────────────\n"
+            $netInfo = "🌐 *МЕРЕЖЕВА ІНФОРМАЦІЯ*\n"
+                . "───────────────────────────\n"
                 . "🖥️ *ПК:* `{$st['name']}`\n"
-                . "📡 *Агент:* " . ($st['online'] ? '🟢 Активний' : '🔴 Офлайн') . "\n"
+                . "📡 *Агент ПК:* " . ($st['online'] ? '🟢 Активний' : '🔴 Офлайн') . "\n"
                 . "🌐 *IP:* `" . ($st['ip'] ?? '') . "`\n"
-                . "📟 *MAC:* `" . ($st['mac'] ?? '') . "`";
+                . "📟 *MAC:* `" . ($st['mac'] ?? '') . "`\n"
+                . "───────────────────────────";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $netInfo, getMainKeyboard($chatId));
         } elseif ($data === 'menu_logs') {
             logAction($userId, $username, "Viewed Logs");
             $logs = file_exists($LOG_FILE) ? implode('', array_slice(file($LOG_FILE), -15)) : "Порожньо";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "📜 *ОСТАННІ ЛОГИ:*\n```\n{$logs}\n```", getMainKeyboard($chatId));
-        } else {
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
+            editOrSendMessage($chatId, $msgId, "📜 *ОСТАННІ ЛОГИ КОМАНД:*\n```\n{$logs}\n```", getMainKeyboard($chatId));
         }
     }
 }
@@ -1114,9 +1247,10 @@ if (isset($_GET['set_webhook'])) {
     $domainName = str_replace(['http://', 'https://'], '', $_SERVER['HTTP_HOST']);
     $currentPath = strtok($_SERVER['REQUEST_URI'], '?');
     $webhookUrl = "https://" . $domainName . $currentPath;
+    
     $res = telegramApi('setWebhook', ['url' => $webhookUrl]);
     echo "<h2>⚡ TELEGRAM WEBHOOK SETUP ⚡</h2>";
-    echo "<p><b>URL:</b> " . htmlspecialchars($webhookUrl) . "</p>";
+    echo "<p><b>URL Webhook:</b> " . htmlspecialchars($webhookUrl) . "</p>";
     echo "<pre>" . print_r($res, true) . "</pre>";
     exit;
 }
@@ -1130,9 +1264,10 @@ if ($input) {
     echo "OK";
 } else {
     $st = getSinglePcStatus('pc_default');
-    echo "<h1>⚡ Rony PC Telegram Control Server ⚡</h1>";
+    echo "<h1>⚡ Rony PC Telegram Control Server (Hosting) ⚡</h1>";
     echo "<p>Статус сервера: <b>Працює 🟢</b></p>";
-    echo "<p>ПК Агент: <b>" . ($st['online'] ? "ОНЛАЙН 🟢" : "ОФЛАЙН 🔴") . "</b></p>";
-    echo "<p>Останній сеанс: " . htmlspecialchars($st['last_seen_date']) . "</p>";
-    echo "<hr><p><a href='?set_webhook=1'><b>[ Активувати Webhook ]</b></a></p>";
+    echo "<p>Статус підключення ПК (Агента): <b>" . ($st['online'] ? "ОНЛАЙН 🟢" : "ОФЛАЙН 🔴") . "</b></p>";
+    echo "<p>Останній сеанс ПК: " . htmlspecialchars($st['last_seen_date']) . "</p>";
+    echo "<hr>";
+    echo "<p><a href='?set_webhook=1'><b>[ Натисніть тут для активації Webhook ]</b></a></p>";
 }
