@@ -962,7 +962,7 @@ function handleUpdate($update) {
                   . "PC_ID = \"{$newPcId}\"\n"
                   . "PC_NAME = \"Новий ПК\"\n"
                   . "```\n\n"
-                  . "4️⃣ Запустіть `run_agent.bat` на новому ПК.\n"
+                  . "4️⃣ Запустіть `install_startup.bat` (або `run_agent.bat`) на новому ПК.\n"
                   . "5️⃣ Бот *автоматично виявить новий ПК* та долучить його до вашого списку!";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
