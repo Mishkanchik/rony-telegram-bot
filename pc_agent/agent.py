@@ -7,6 +7,7 @@ import json
 import subprocess
 import shutil
 import ctypes
+from ctypes import wintypes
 from urllib.parse import quote
 
 # ---------------------------------------------------------
@@ -484,9 +485,29 @@ def handle_command(cmd):
         elif action == 'fullscreen':
             pyautogui.press('f')
         elif action == 'scroll_up':
-            pyautogui.scroll(300)
+            # One wheel step only on explicit bot button press (no auto-scroll / no hold-repeat).
+            # Center cursor on active window so the wheel hits content, not dead UI areas.
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if hwnd:
+                rect = ctypes.wintypes.RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    cx = (rect.left + rect.right) // 2
+                    cy = (rect.top + rect.bottom) // 2
+                    user32.SetCursorPos(cx, cy)
+            # 240 = 2 wheel notches; WHEEL_DELTA=120. Single event per command.
+            user32.mouse_event(0x0800, 0, 0, 240, 0)  # MOUSEEVENTF_WHEEL
         elif action == 'scroll_down':
-            pyautogui.scroll(-300)
+            # One wheel step only on explicit bot button press (no auto-scroll / no hold-repeat).
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if hwnd:
+                rect = ctypes.wintypes.RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    cx = (rect.left + rect.right) // 2
+                    cy = (rect.top + rect.bottom) // 2
+                    user32.SetCursorPos(cx, cy)
+            user32.mouse_event(0x0800, 0, 0, -240, 0)  # MOUSEEVENTF_WHEEL
 
     elif cmd_name == 'shutdown':
         os.system("shutdown /s /f /t 5")
