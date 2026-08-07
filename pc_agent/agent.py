@@ -369,8 +369,7 @@ def get_process_name(pid):
 
 def get_active_processes(limit=None):
     """
-    Get all active user & window processes dynamically without artificial hard limits.
-    Prioritizes top-level visible application windows, followed by active user applications.
+    Get only top-level visible application windows (like open programs with windows).
     Returns list of dicts: [{'pid': int, 'name': str, 'title': str}]
     """
     ignore_proc = {
@@ -389,7 +388,7 @@ def get_active_processes(limit=None):
     seen_pids = set()
     name_cache = {}
 
-    # 1. Gather top-level visible window processes (Task Manager Apps)
+    # Only gather top-level visible application windows
     try:
         windows = enum_windows()
         for hwnd, title, pid in windows:
@@ -412,32 +411,6 @@ def get_active_processes(limit=None):
             })
     except Exception as e:
         print(f"[-] Error listing window processes: {e}")
-
-    # 2. Add remaining non-system user processes sorted by memory usage
-    try:
-        proc_list = []
-        for p in psutil.process_iter(['pid', 'name', 'memory_info']):
-            try:
-                pid = p.info['pid']
-                pname = (p.info['name'] or '').lower()
-                if pid in seen_pids or pid == os.getpid() or pid == 0 or pname in ignore_proc:
-                    continue
-                mem = p.info['memory_info'].rss if p.info['memory_info'] else 0
-                proc_list.append((mem, pid, pname))
-            except Exception:
-                pass
-
-        proc_list.sort(key=lambda x: x[0], reverse=True)
-        for mem, pid, pname in proc_list:
-            seen_pids.add(pid)
-            clean_name = pname.rsplit('.', 1)[0].capitalize()
-            processes.append({
-                'pid': pid,
-                'name': pname,
-                'title': clean_name
-            })
-    except Exception as e:
-        print(f"[-] Error listing psutil processes: {e}")
 
     if limit is not None and isinstance(limit, int) and limit > 0:
         return processes[:limit]
