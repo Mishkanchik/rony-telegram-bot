@@ -962,7 +962,7 @@ function handleUpdate($update) {
                   . "PC_ID = \"{$newPcId}\"\n"
                   . "PC_NAME = \"Новий ПК\"\n"
                   . "```\n\n"
-                  . "4️⃣ Запустіть ярлик `Install Rony Agent` (або `install_startup.bat`) на новому ПК.\n"
+                  . "4️⃣ Запустіть ярлик `Install Rony Agent` на новому ПК (який запускає `install_startup.bat`).\n"
                   . "5️⃣ Бот *автоматично виявить новий ПК* та долучить його до вашого списку!";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
@@ -1222,51 +1222,4 @@ function handleUpdate($update) {
                 . "───────────────────────────\n"
                 . "🖥️ *ПК:* `{$st['name']}`\n"
                 . "📡 *Агент ПК:* " . ($st['online'] ? '🟢 Активний' : '🔴 Офлайн') . "\n"
-                . "🌐 *IP:* `" . ($st['ip'] ?? '') . "`\n"
-                . "📟 *MAC:* `" . ($st['mac'] ?? '') . "`\n"
-                . "───────────────────────────";
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, $netInfo, getMainKeyboard($chatId));
-        } elseif ($data === 'menu_logs') {
-            logAction($userId, $username, "Viewed Logs");
-            $logs = file_exists($LOG_FILE) ? implode('', array_slice(file($LOG_FILE), -15)) : "Порожньо";
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "📜 *ОСТАННІ ЛОГИ КОМАНД:*\n```\n{$logs}\n```", getMainKeyboard($chatId));
-        }
-    }
-}
-
-// -------------------------------------------------------------
-// WEBHOOK EXECUTION ENTRYPOINT
-// -------------------------------------------------------------
-
-header('Content-Type: text/html; charset=utf-8');
-
-if (isset($_GET['set_webhook'])) {
-    $domainName = str_replace(['http://', 'https://'], '', $_SERVER['HTTP_HOST']);
-    $currentPath = strtok($_SERVER['REQUEST_URI'], '?');
-    $webhookUrl = "https://" . $domainName . $currentPath;
-    
-    $res = telegramApi('setWebhook', ['url' => $webhookUrl]);
-    echo "<h2>⚡ TELEGRAM WEBHOOK SETUP ⚡</h2>";
-    echo "<p><b>URL Webhook:</b> " . htmlspecialchars($webhookUrl) . "</p>";
-    echo "<pre>" . print_r($res, true) . "</pre>";
-    exit;
-}
-
-$input = file_get_contents('php://input');
-if ($input) {
-    $update = json_decode($input, true);
-    if ($update) {
-        handleUpdate($update);
-    }
-    echo "OK";
-} else {
-    $st = getSinglePcStatus('pc_default');
-    echo "<h1>⚡ Rony PC Telegram Control Server (Hosting) ⚡</h1>";
-    echo "<p>Статус сервера: <b>Працює 🟢</b></p>";
-    echo "<p>Статус підключення ПК (Агента): <b>" . ($st['online'] ? "ОНЛАЙН 🟢" : "ОФЛАЙН 🔴") . "</b></p>";
-    echo "<p>Останній сеанс ПК: " . htmlspecialchars($st['last_seen_date']) . "</p>";
-    echo "<hr>";
-    echo "<p><a href='?set_webhook=1'><b>[ Натисніть тут для активації Webhook ]</b></a></p>";
-}
+                .

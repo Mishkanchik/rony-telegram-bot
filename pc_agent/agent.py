@@ -606,17 +606,19 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'comet':
-        # Focus existing Comet if running
+        # Focus existing Comet window if running
         hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
-        if not hwnd:
-            hwnd, title, pname = find_browser_window(prefer_comet=True)
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Comet/browser: {title}")
+            print(f"[+] Focused existing Comet: {title}")
+            return
+        # If not, find any browser window and bring it to front
+        hwnd, title, pname = find_browser_window(prefer_comet=True)
+        if hwnd:
+            force_foreground(hwnd)
+            print(f"[+] Focused browser: {title}")
             return
         if focus_only:
-            # Still try open if nothing to focus
-            open_in_comet_or_browser("about:blank")
             return
         open_in_comet_or_browser("https://google.com")
         return
