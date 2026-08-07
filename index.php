@@ -1188,7 +1188,7 @@ function handleUpdate($update) {
         } elseif ($data === 'menu_movies') {
             setSearchState($chatId, false);
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "🎬 *МЕНЮ ФІЛЬМІВ ТА СЕРІАЛІВ*", getMoviesKeyboard());
+            editOrSendMessage($chatId, $msgId, "🎬 *МЕНЮ ФІЛЬМІВ ТА СЕРІАЛЇВ*", getMoviesKeyboard());
         } elseif (strpos($data, 'media_') === 0) {
             $act = str_replace('media_', '', $data);
             logAction($userId, $username, "Media action: $act");
@@ -1222,8 +1222,60 @@ function handleUpdate($update) {
             $netInfo = "🌐 *МЕРЕЖЕВА ІНФОРМАЦІЯ*\n"
                 . "───────────────────────────\n"
                 . "🖥️ *ПК:* `{$st['name']}`\n"
-                . "📡 *Агент ПК:* " . ($st['online'] ? '🟢 Активний' : '🔴 Офлайн') . "\n"
-                . "───────────────────────────";
-            editOrSendMessage($chatId, $msgId, $netInfo, getBackKeyboard('menu_main'));
+                . "🌍 *Локальний IP:* `" . ($st['ip'] ?? 'N/A') . "`\n"
+                . "📟 *MAC-адреса:* `" . ($st['mac'] ?? 'N/A') . "`\n"
+                . "📡 *Статус:* " . ($st['online'] ? '🟢 Онлайн' : '🔴 Офлайн') . "\n"
+                . "⏱️ *Востаннє у мережі:* `" . ($st['last_seen_date'] ?? 'Ніколи') . "`\n"
+                . "───────────────────────────\n"
+                . "🔊 Натисніть нижче для керування аудіо-пристроями:";
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
+            $netKb = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '🔊 Аудіо-пристрої', 'callback_data' => 'menu_audio']
+                    ],
+                    [
+                        ['text' => '« Назад у головне меню', 'callback_data' => 'menu_main']
+                    ]
+                ]
+            ];
+            editOrSendMessage($chatId, $msgId, $netInfo, $netKb);
+        } elseif ($data === 'menu_logs') {
+            logAction($userId, $username, "Viewed Logs");
+            $logContent = '';
+            if (file_exists($LOG_FILE)) {
+                $lines = file($LOG_FILE);
+                $lastLines = array_slice($lines, -15);
+                $logContent = implode('', $lastLines);
+            }
+            if (empty(trim($logContent))) {
+                $logContent = 'Логи порожні.';
+            }
+            $logContent = str_replace(['`', '*', '_'], '', $logContent);
+            $logText = "📜 *ОСТАННІ ЛОГИ ДІЙ*\n"
+                . "───────────────────────────\n"
+                . "```\n" . mb_substr($logContent, 0, 3500) . "\n```";
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
+            editOrSendMessage($chatId, $msgId, $logText, getMainKeyboard($chatId));
+        } else {
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
         }
-?>
+    }
+}
+
+// -------------------------------------------------------------------
+// MAIN WEBHOOK ENTRY POINT
+// -------------------------------------------------------------------
+
+$input = file_get_contents('php://input');
+if ($input) {
+    $update = json_decode($input, true);
+    if (is_array($update)) {
+        handleUpdate($update);
+    }
+}
+
+// Simple health check
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['agent_poll']) && !isset($_GET['agent_online'])) {
+    echo "✅ Rony Telegram Bot is running. " . date('Y-m-d H:i:s');
+}
