@@ -14,7 +14,7 @@ import ctypes
 # -------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------
-SERVER_URL = "https://driver.lutsk.ua/index.php"  # Update with your server URL
+SERVER_URL = "https://rony-telegram-bot.onrender.com/index.php"  # Hosting server URL
 PC_ID = "pc_default"
 PC_NAME = "Rony PC"
 
@@ -57,37 +57,53 @@ def send_online_notification():
     except Exception as e:
         print(f"[-] Failed to send online notification: {e}")
 
-def get_active_processes(limit=15):
+def get_active_processes(limit=None):
     procs = []
     try:
+        # Get list of running processes with window titles if possible via PowerShell or psutil
+        ps_script = """
+        Get-Process | Where-Object { $_.MainWindowTitle -ne "" } | Select-Object Id, ProcessName, MainWindowTitle | ConvertTo-Json
+        """
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=10)
+        window_procs = {}
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                parsed = json.loads(res.stdout.strip())
+                if isinstance(parsed, dict):
+                    parsed = [parsed]
+                for item in parsed:
+                    window_procs[item.get('Id')] = item.get('MainWindowTitle')
+            except Exception:
+                pass
+
         for p in psutil.process_iter(['pid', 'name']):
             try:
-                # Filter out system/idle processes
-                name = p.info['name']
                 pid = p.info['pid']
-                if not name or pid == 0 or name.lower() in ['system idle process', 'system', 'registry', 'smss.exe', 'csrss.exe']:
+                name = p.info['name']
+                if not name or pid == 0 or name.lower() in ['system idle process', 'system', 'registry', 'smss.exe', 'csrss.exe', 'conhost.exe']:
                     continue
-                
-                # Check for main window title if available
-                title = name
-                try:
-                    # Windows specific process window title check via powershell or psutil
-                    pass
-                except Exception:
-                    pass
-                
+
+                title = window_procs.get(pid)
+                # If process has a main window or is a major user application, prioritize / include it
+                # If no window title, use executable name (removing .exe)
+                if not title:
+                    # Skip background system services without window if limit is set, or format nicely
+                    title = name[:-4] if name.lower().endswith('.exe') else name
+
                 procs.append({
                     'pid': pid,
                     'name': name,
-                    'title': title
+                    'title': title,
+                    'has_window': pid in window_procs
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
+
     except Exception as e:
         print(f"[-] Error getting processes: {e}")
 
-    # Sort processes by name
-    procs = sorted(procs, key=lambda x: x['name'].lower())
+    # Sort: processes with active windows first, then by name
+    procs = sorted(procs, key=lambda x: (not x.get('has_window', False), x['title'].lower()))
     if limit:
         procs = procs[:limit]
     return procs
@@ -95,25 +111,28 @@ def get_active_processes(limit=15):
 def get_audio_devices():
     devices = []
     try:
-        # PowerShell script using IMMDeviceEnumerator via C# code dynamically compiled or WinRT/Com
-        ps_script = """
-Add-Type -TypeDefinition @"
+        # High reliability PowerShell script using IMMDeviceEnumerator COM interface with proper GUID (A95664D2-9614-4F35-A746-DE8DB63617E6)
+        ps_script = '''
+$code = @"
 using System;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
 
 public class AudioDeviceFetcher {
-    [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [ComImport, Guid("BCDE0385-4944-460C-8564-65D99D075681")]
+    public class MMDeviceEnumeratorComObject { }
+
+    [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IMMDeviceEnumerator {
         int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
         int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
     }
 
     [Guid("0BD6A3BA-3330-4830-8964-0888B07D0E86"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IMMDeviceCollection {{
+    public interface IMMDeviceCollection {
         int GetCount(out uint count);
         int Item(uint index, out IMMDevice device);
-    }}
+    }
 
     [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IMMDevice {
@@ -140,53 +159,74 @@ public class AudioDeviceFetcher {
         [FieldOffset(8)] public IntPtr pwszVal;
     }
 
-    [ComImport, Guid("BCDE0385-4944-460C-8564-65D99D075681")]
-    public class MMDeviceEnumeratorComObject { }
-
     public static string GetDevicesJson() {
-        var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-        IMMDevice defaultDev = null;
-        string defaultId = "";
         try {
-            enumerator.GetDefaultAudioEndpoint(0, 0, out defaultDev);
-            if (defaultDev != null) defaultDev.GetId(out defaultId);
-        } catch {}
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+            IMMDevice defaultDev = null;
+            string defaultId = "";
+            try {
+                enumerator.GetDefaultAudioEndpoint(0, 0, out defaultDev);
+                if (defaultDev != null) defaultDev.GetId(out defaultId);
+            } catch {}
 
-        IMMDeviceCollection collection;
-        enumerator.EnumAudioEndpoints(0, 1, out collection); // eRender = 0, DEVICE_STATE_ACTIVE = 1
-        uint count;
-        collection.GetCount(out count);
+            IMMDeviceCollection collection;
+            enumerator.EnumAudioEndpoints(0, 1, out collection); // eRender = 0, DEVICE_STATE_ACTIVE = 1
+            uint count;
+            collection.GetCount(out count);
 
-        var list = new List<string>();
-        PROPERTYKEY PKEY_Device_FriendlyName = new PROPERTYKEY { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+            var list = new List<string>();
+            PROPERTYKEY PKEY_Device_FriendlyName = new PROPERTYKEY { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
 
-        for (uint i = 0; i < count; i++) {
-            IMMDevice dev;
-            collection.Item(i, out dev);
-            string id;
-            dev.GetId(out id);
-            IPropertyStore store;
-            dev.OpenPropertyStore(0, out store);
-            PROPVARIANT prop;
-            store.GetValue(ref PKEY_Device_FriendlyName, out prop);
-            string name = Marshal.PtrToStringUni(prop.pwszVal);
-            bool isDef = (id == defaultId);
-            list.Add(string.Format("{{\"index\":{0},\"name\":\"{1}\",\"is_default\":{2}}}", i, name.Replace("\\\\", "\\\\").Replace("\"", "\\\""), isDef ? "true" : "false"));
+            for (uint i = 0; i < count; i++) {
+                IMMDevice dev;
+                collection.Item(i, out dev);
+                string id;
+                dev.GetId(out id);
+                IPropertyStore store;
+                dev.OpenPropertyStore(0, out store);
+                PROPVARIANT prop;
+                store.GetValue(ref PKEY_Device_FriendlyName, out prop);
+                string name = Marshal.PtrToStringUni(prop.pwszVal);
+                bool isDef = (id == defaultId);
+                string cleanName = (name != null) ? name.Replace("\\\\", "/").Replace("\"", "'") : "Audio Device";
+                list.Add(string.Format("{{\\"index\\":{0},\\"name\\":\\"{1}\\",\\"is_default\\":{2}}}", i, cleanName, isDef ? "true" : "false"));
+            }
+            return "[" + string.Join(",", list.ToArray()) + "]";
+        } catch {
+            return "[]";
         }
-        return "[" + string.Join(",", list.ToArray()) + "]";
     }
 }
 "@
+Add-Type -TypeDefinition $code
 [AudioDeviceFetcher]::GetDevicesJson()
-"""
-        res = subprocess.run(["powershell", "-Command", ps_script], capture_output=True, text=True, timeout=10)
+'''
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=10)
         if res.returncode == 0 and res.stdout.strip():
-            devices = json.loads(res.stdout.strip())
-            return devices
+            out = res.stdout.strip()
+            devices = json.loads(out)
+            if devices:
+                return devices
     except Exception as e:
-        print(f"[-] Error getting audio devices: {e}")
-    
-    # Fallback to SoundVolumeView or simple audio device check if PS fails
+        print(f"[-] Error getting audio devices via COM: {e}")
+
+    # Fallback to WMI sound devices if COM fails
+    try:
+        ps_wmi = "Get-CimInstance Win32_SoundDevice | Select-Object Name, Status | ConvertTo-Json"
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_wmi], capture_output=True, text=True, timeout=8)
+        if res.returncode == 0 and res.stdout.strip():
+            raw = json.loads(res.stdout.strip())
+            if isinstance(raw, dict):
+                raw = [raw]
+            for idx, dev in enumerate(raw):
+                devices.append({
+                    'index': idx,
+                    'name': dev.get('Name', f'Audio Device {idx+1}'),
+                    'is_default': (idx == 0)
+                })
+    except Exception as e:
+        print(f"[-] WMI audio fallback error: {e}")
+
     return devices
 
 def set_audio_device(device_index=None, device_id=None):
