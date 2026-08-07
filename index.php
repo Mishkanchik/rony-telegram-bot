@@ -361,7 +361,8 @@ function getMainKeyboard($chatId = null) {
                 ['text' => '⚙️ Живлення', 'callback_data' => 'menu_power']
             ],
             [
-                ['text' => '🔊 Пристрої звуку', 'callback_data' => 'menu_audio']
+                ['text' => '☄️ Comet Browser', 'callback_data' => 'app_comet'],
+                ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
             ],
             [
                 ['text' => '🌐 Мережа & Інфо', 'callback_data' => 'menu_net'],
@@ -1222,4 +1223,7 @@ function handleUpdate($update) {
                 . "───────────────────────────\n"
                 . "🖥️ *ПК:* `{$st['name']}`\n"
                 . "📡 *Агент ПК:* " . ($st['online'] ? '🟢 Активний' : '🔴 Офлайн') . "\n"
-                .
+                . "───────────────────────────";
+            editOrSendMessage($chatId, $msgId, $netInfo, getBackKeyboard('menu_main'));
+        }
+?>
