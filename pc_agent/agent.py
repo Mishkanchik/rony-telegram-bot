@@ -367,9 +367,10 @@ def get_process_name(pid):
     except Exception:
         return ""
 
-def get_active_processes(limit=10):
+def get_active_processes(limit=None):
     """
-    Get top processes (up to limit, max 10) running on PC, prioritizing visible application windows.
+    Get all active user & window processes dynamically without artificial hard limits.
+    Prioritizes top-level visible application windows, followed by active user applications.
     Returns list of dicts: [{'pid': int, 'name': str, 'title': str}]
     """
     ignore_proc = {
@@ -377,7 +378,7 @@ def get_active_processes(limit=10):
         'wininit.exe', 'lsass.exe', 'smss.exe', 'winlogon.exe', 'dwm.exe',
         'ctfmon.exe', 'searchhost.exe', 'startmenuexperiencehost.exe',
         'runtimebroker.exe', 'shellexperiencehost.exe', 'applicationframehost.exe',
-        'lockapp.exe', 'sihost.exe', 'taskhostw.exe'
+        'lockapp.exe', 'sihost.exe', 'taskhostw.exe', 'conhost.exe', 'compattelrunner.exe'
     }
     ignore_titles = {
         'program manager', 'settings', 'windows input experience', 'taskbar',
@@ -386,11 +387,9 @@ def get_active_processes(limit=10):
 
     processes = []
     seen_pids = set()
-
-    # Fast cache for process names
     name_cache = {}
 
-    # 1. First gather top-level visible window processes (Task Manager Apps)
+    # 1. Gather top-level visible window processes (Task Manager Apps)
     try:
         windows = enum_windows()
         for hwnd, title, pid in windows:
@@ -411,41 +410,39 @@ def get_active_processes(limit=10):
                 'name': pname,
                 'title': t_clean[:35]
             })
-            if len(processes) >= limit:
-                break
     except Exception as e:
         print(f"[-] Error listing window processes: {e}")
 
-    # 2. If fewer than limit, fill up with top memory-consuming user processes
-    if len(processes) < limit:
-        try:
-            proc_list = []
-            for p in psutil.process_iter(['pid', 'name', 'memory_info']):
-                try:
-                    pid = p.info['pid']
-                    pname = (p.info['name'] or '').lower()
-                    if pid in seen_pids or pid == os.getpid() or pid == 0 or pname in ignore_proc:
-                        continue
-                    mem = p.info['memory_info'].rss if p.info['memory_info'] else 0
-                    proc_list.append((mem, pid, pname))
-                except Exception:
-                    pass
+    # 2. Add remaining non-system user processes sorted by memory usage
+    try:
+        proc_list = []
+        for p in psutil.process_iter(['pid', 'name', 'memory_info']):
+            try:
+                pid = p.info['pid']
+                pname = (p.info['name'] or '').lower()
+                if pid in seen_pids or pid == os.getpid() or pid == 0 or pname in ignore_proc:
+                    continue
+                mem = p.info['memory_info'].rss if p.info['memory_info'] else 0
+                proc_list.append((mem, pid, pname))
+            except Exception:
+                pass
 
-            proc_list.sort(key=lambda x: x[0], reverse=True)
-            for mem, pid, pname in proc_list:
-                seen_pids.add(pid)
-                clean_name = pname.rsplit('.', 1)[0].capitalize()
-                processes.append({
-                    'pid': pid,
-                    'name': pname,
-                    'title': clean_name
-                })
-                if len(processes) >= limit:
-                    break
-        except Exception as e:
-            print(f"[-] Error listing psutil processes: {e}")
+        proc_list.sort(key=lambda x: x[0], reverse=True)
+        for mem, pid, pname in proc_list:
+            seen_pids.add(pid)
+            clean_name = pname.rsplit('.', 1)[0].capitalize()
+            processes.append({
+                'pid': pid,
+                'name': pname,
+                'title': clean_name
+            })
+    except Exception as e:
+        print(f"[-] Error listing psutil processes: {e}")
 
-    return processes[:limit]
+    if limit is not None and isinstance(limit, int) and limit > 0:
+        return processes[:limit]
+
+    return processes
 
 def force_foreground(hwnd):
     """Bring window to foreground reliably on Windows."""
@@ -825,7 +822,7 @@ def send_online_notification():
     except Exception as e:
         print(f"[-] Failed to send online notification: {e}")
 
-def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None, audio_devices=None):
+def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None, audio_devices=None, page=1):
     try:
         data = {'agent_result': '1', 'chat_id': str(chat_id), 'pc_id': PC_ID, 'pc_name': PC_NAME}
         if msg_id:
@@ -835,6 +832,7 @@ def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None
         if proc_list is not None:
             data['type'] = 'processes'
             data['procs_json'] = json.dumps(proc_list, ensure_ascii=False)
+            data['page'] = page
         if audio_devices is not None:
             data['type'] = 'audio_devices'
             data['audio_devices_json'] = json.dumps(audio_devices, ensure_ascii=False)
@@ -904,7 +902,8 @@ def handle_command(cmd_item):
     elif cmd_name == 'get_processes':
         try:
             procs = get_active_processes(limit=None)
-            send_result(chat_id, proc_list=procs, msg_id=params.get('msg_id'))
+            page = params.get('page', 1)
+            send_result(chat_id, proc_list=procs, msg_id=params.get('msg_id'), page=page)
         except Exception as e:
             print(f"[-] get_processes error: {e}")
 
@@ -1052,6 +1051,22 @@ def handle_command(cmd_item):
         ps_cmd = "$wsh = New-Object -ComObject WScript.Shell; $wsh.SendKeys(' '); Start-Sleep -Milliseconds 300; $wsh.SendKeys('{ENTER}')"
         subprocess.run(["powershell", "-Command", ps_cmd])
 
+    elif cmd_name == 'uninstall':
+        print("[!] Cleaning up agent files and startup...")
+        # Remove startup shortcut
+        startup_path = os.path.join(os.environ.get('APPDATA', ''), r"Microsoft\Windows\Start Menu\Programs\Startup\run_agent.bat")
+        if os.path.exists(startup_path):
+            os.remove(startup_path)
+        # Kill all instances of agent.py as well
+        for proc in psutil.process_iter(['name', 'cmdline']):
+            try:
+                if proc.info['name'] == 'python.exe' and 'agent.py' in str(proc.info['cmdline']):
+                    proc.terminate()
+            except: pass
+        # Self-delete (limited, but tries to script it)
+        os.system('del /f /q "run_agent.bat"')
+        sys.exit(0)
+
     elif cmd_name == 'shutdown':
         os.system("shutdown /s /f /t 2")
 
@@ -1099,7 +1114,8 @@ def handle_command(cmd_item):
         time.sleep(0.3)
         try:
             procs = get_active_processes(limit=None)
-            send_result(chat_id, proc_list=procs, msg_id=params.get('msg_id'))
+            page = params.get('page', 1)
+            send_result(chat_id, proc_list=procs, msg_id=params.get('msg_id'), page=page)
         except Exception:
             pass
 

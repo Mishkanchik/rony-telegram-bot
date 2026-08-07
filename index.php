@@ -657,29 +657,53 @@ if (isset($_POST['agent_result'])) {
     if ($chatId) {
         if (isset($_POST['type']) && $_POST['type'] === 'processes' && isset($_POST['procs_json'])) {
             $procs = json_decode($_POST['procs_json'], true) ?: [];
-            $procText = "📱 *АКТИВНІ ПРОЦЕСИ ПК* (" . count($procs) . ")\n"
+            
+            $page = isset($_POST['page']) ? (int)$_POST['page'] : 1;
+            $perPage = 10;
+            $totalProcs = count($procs);
+            $totalPages = ceil($totalProcs / $perPage);
+            if ($page < 1) $page = 1;
+            if ($page > $totalPages && $totalPages > 0) $page = $totalPages;
+
+            $procText = "📱 *АКТИВНІ ПРОЦЕСИ ПК* ({$totalProcs})\n"
                       . "───────────────────────────\n";
             $buttons = [];
+            
             if (empty($procs)) {
                 $procText .= "Не знайдено активних процесів.\n";
             } else {
-                foreach ($procs as $idx => $p) {
-                    $num = $idx + 1;
+                $startIdx = ($page - 1) * $perPage;
+                $pageProcs = array_slice($procs, $startIdx, $perPage);
+                
+                foreach ($pageProcs as $idx => $p) {
+                    $num = $startIdx + $idx + 1;
                     $rawTitle = $p['title'] ?? $p['name'];
-                    $cleanTitle = preg_replace('/[*_`\[\]\\\\]/', '', $rawTitle);
+                    $cleanTitle = mb_substr(preg_replace('/[*_`\[\]\\\\]/', '', $rawTitle), 0, 30);
                     $cleanName = preg_replace('/[*_`\[\]\\\\]/', '', $p['name']);
                     $pid = (int)$p['pid'];
-                    $procText .= "{$num}. 🔹 *{$cleanTitle}* (`{$cleanName}`, PID: `{$pid}`)\n";
+                    $procText .= "{$num}. 🔹 *{$cleanTitle}* (`{$cleanName}`)\n";
                     
-                    $btnTitle = (mb_strlen($cleanTitle) > 18) ? mb_substr($cleanTitle, 0, 15) . '...' : $cleanTitle;
-                    $buttons[] = [['text' => "❌ Закрити {$btnTitle}", 'callback_data' => "kill_proc_{$pid}"]];
+                    $btnTitle = (mb_strlen($cleanTitle) > 15) ? mb_substr($cleanTitle, 0, 15) . '...' : $cleanTitle;
+                    $buttons[] = [['text' => "❌ {$btnTitle} (PID {$pid})", 'callback_data' => "kill_proc_{$pid}_{$page}"]];
                 }
             }
             $procText .= "───────────────────────────\n"
+                       . "Сторінка {$page} з " . max(1, $totalPages) . "\n"
                        . "Оберіть задачу нижче для примусового закриття:";
             
+            $navRow = [];
+            if ($page > 1) {
+                $navRow[] = ['text' => '⬅️ Назад', 'callback_data' => "menu_processes_" . ($page - 1)];
+            }
+            if ($page < $totalPages) {
+                $navRow[] = ['text' => 'Вперед ➡️', 'callback_data' => "menu_processes_" . ($page + 1)];
+            }
+            if (!empty($navRow)) {
+                $buttons[] = $navRow;
+            }
+            
             $buttons[] = [
-                ['text' => '🔄 Оновити список', 'callback_data' => 'menu_processes'],
+                ['text' => '🔄 Оновити список', 'callback_data' => "menu_processes_{$page}"],
                 ['text' => '« Головне меню', 'callback_data' => 'menu_main']
             ];
             
@@ -898,13 +922,17 @@ function handleUpdate($update) {
                   . "5️⃣ Бот *автоматично виявить новий ПК* та долучить його до вашого списку!";
             telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
             editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
-        } elseif ($data === 'menu_processes') {
-            logAction($userId, $username, "Checked Active Processes");
+        } elseif (strpos($data, 'menu_processes') === 0) {
+            $page = 1;
+            if (strpos($data, 'menu_processes_') === 0) {
+                $page = (int)str_replace('menu_processes_', '', $data);
+            }
+            logAction($userId, $username, "Checked Active Processes (Page: $page)");
             setSearchState($chatId, false);
             $pcId = getSelectedPcId($chatId);
             $st = getSinglePcStatus($pcId);
             if ($st['online']) {
-                addCommandToQueue('get_processes', $chatId, ['msg_id' => $msgId]);
+                addCommandToQueue('get_processes', $chatId, ['msg_id' => $msgId, 'page' => $page]);
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Отримую список активних процесів...']);
                 $loadingText = "📱 *АКТИВНІ ПРОЦЕСИ ПК*\n"
                     . "───────────────────────────\n"
@@ -920,9 +948,11 @@ function handleUpdate($update) {
                 editOrSendMessage($chatId, $msgId, $statusText, getMainKeyboard($chatId));
             }
         } elseif (strpos($data, 'kill_proc_') === 0) {
-            $pid = (int)str_replace('kill_proc_', '', $data);
+            $parts = explode('_', str_replace('kill_proc_', '', $data));
+            $pid = (int)$parts[0];
+            $page = isset($parts[1]) ? (int)$parts[1] : 1;
             logAction($userId, $username, "Kill process PID: $pid");
-            addCommandToQueue('kill_app', $chatId, ['pid' => $pid, 'msg_id' => $msgId]);
+            addCommandToQueue('kill_app', $chatId, ['pid' => $pid, 'msg_id' => $msgId, 'page' => $page]);
             telegramApi('answerCallbackQuery', [
                 'callback_query_id' => $cb['id'],
                 'text' => "❌ Закриваю PID {$pid}..."
