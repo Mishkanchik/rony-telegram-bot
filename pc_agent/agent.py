@@ -1,37 +1,26 @@
-import sys
 import os
+import sys
 import time
 import requests
+import pyautogui
 import json
 import subprocess
-import socket
-import pyautogui
-import psutil
-from PIL import ImageGrab
-import io
+import shutil
 import ctypes
+from urllib.parse import quote
 
-# -------------------------------------------------------------
-# CONFIGURATION
-# -------------------------------------------------------------
-SERVER_URL = "https://rony-telegram-bot.onrender.com/index.php"  # Hosting server URL
-PC_ID = "pc_default"
-PC_NAME = "Rony PC"
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
+SERVER_URL = os.environ.get("SERVER_URL", "https://rony-telegram-bot.onrender.com/").rstrip("/") + "/"
+PC_NAME = os.environ.get("COMPUTERNAME", "UNKNOWN_PC")
+PC_ID = f"{PC_NAME}"
 
-# PyAutoGUI safety configuration
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.05
-
-def get_mac_address():
-    try:
-        import uuid
-        mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(0,8*6,8)][::-1])
-        return mac
-    except Exception:
-        return "00:00:00:00:00:00"
 
 def get_local_ip():
     try:
+        import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
@@ -40,85 +29,15 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-def send_online_notification():
-    try:
-        ip = get_local_ip()
-        mac = get_mac_address()
-        payload = {
-            'agent_online': '1',
-            'pc_id': PC_ID,
-            'pc_name': PC_NAME,
-            'ip': ip,
-            'mac': mac
-        }
-        r = requests.post(SERVER_URL, data=payload, timeout=5)
-        if r.status_code == 200:
-            print("[+] Online notification sent to hosting server.")
-    except Exception as e:
-        print(f"[-] Failed to send online notification: {e}")
-
-def get_active_processes(limit=None):
-    procs = []
-    try:
-        # Get list of running processes with window titles if possible via PowerShell or psutil
-        ps_script = """
-        Get-Process | Where-Object { $_.MainWindowTitle -ne "" } | Select-Object Id, ProcessName, MainWindowTitle | ConvertTo-Json
-        """
-        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=10)
-        window_procs = {}
-        if res.returncode == 0 and res.stdout.strip():
-            try:
-                parsed = json.loads(res.stdout.strip())
-                if isinstance(parsed, dict):
-                    parsed = [parsed]
-                for item in parsed:
-                    window_procs[item.get('Id')] = item.get('MainWindowTitle')
-            except Exception:
-                pass
-
-        for p in psutil.process_iter(['pid', 'name']):
-            try:
-                pid = p.info['pid']
-                name = p.info['name']
-                if not name or pid == 0 or name.lower() in ['system idle process', 'system', 'registry', 'smss.exe', 'csrss.exe', 'conhost.exe']:
-                    continue
-
-                title = window_procs.get(pid)
-                # If process has a main window or is a major user application, prioritize / include it
-                # If no window title, use executable name (removing .exe)
-                if not title:
-                    # Skip background system services without window if limit is set, or format nicely
-                    title = name[:-4] if name.lower().endswith('.exe') else name
-
-                procs.append({
-                    'pid': pid,
-                    'name': name,
-                    'title': title,
-                    'has_window': pid in window_procs
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-
-    except Exception as e:
-        print(f"[-] Error getting processes: {e}")
-
-    # Sort: processes with active windows first, then by name
-    procs = sorted(procs, key=lambda x: (not x.get('has_window', False), x['title'].lower()))
-    if limit:
-        procs = procs[:limit]
-    return procs
-
-def get_audio_devices():
-    devices = []
-    try:
-        # High reliability PowerShell script using IMMDeviceEnumerator COM interface with proper GUID (A95664D2-9614-4F35-A746-DE8DB63617E6)
-        ps_script = '''
-$code = @"
+# ---------------------------------------------------------
+# C# Audio Devices Helper (MMDeviceEnumerator & IPolicyConfig)
+# ---------------------------------------------------------
+AUDIO_CSHARP_CODE = '''
 using System;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
 
-public class AudioDeviceFetcher {
+public class AudioDeviceHelper {
     [ComImport, Guid("BCDE0385-4944-460C-8564-65D99D075681")]
     public class MMDeviceEnumeratorComObject { }
 
@@ -159,6 +78,24 @@ public class AudioDeviceFetcher {
         [FieldOffset(8)] public IntPtr pwszVal;
     }
 
+    [Guid("f8679f50-850a-41cf-9c72-430f60f290c0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IPolicyConfig {
+        int GetMixFormat();
+        int GetDeviceFormat();
+        int ResetDeviceFormat();
+        int SetDeviceFormat();
+        int GetProcessingPeriod();
+        int SetProcessingPeriod();
+        int GetShareMode();
+        int SetShareMode();
+        int GetPropertyValue();
+        int SetPropertyValue();
+        int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int role);
+    }
+
+    [ComImport, Guid("87086544-460C-4264-A4B0-8DA2F2637568")]
+    public class PolicyConfigClient { }
+
     public static string GetDevicesJson() {
         try {
             var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
@@ -170,7 +107,7 @@ public class AudioDeviceFetcher {
             } catch {}
 
             IMMDeviceCollection collection;
-            enumerator.EnumAudioEndpoints(0, 1, out collection); // eRender = 0, DEVICE_STATE_ACTIVE = 1
+            enumerator.EnumAudioEndpoints(0, 1, out collection);
             uint count;
             collection.GetCount(out count);
 
@@ -189,146 +126,134 @@ public class AudioDeviceFetcher {
                 string name = Marshal.PtrToStringUni(prop.pwszVal);
                 bool isDef = (id == defaultId);
                 string cleanName = (name != null) ? name.Replace("\\\\", "/").Replace("\"", "'") : "Audio Device";
-                list.Add(string.Format("{{\\"index\\":{0},\\"name\\":\\"{1}\\",\\"is_default\\":{2}}}", i, cleanName, isDef ? "true" : "false"));
+                list.Add(string.Format("{{\"index\":{0},\"name\":\"{1}\",\"is_default\":{2}}}", i, cleanName, isDef ? "true" : "false"));
             }
             return "[" + string.Join(",", list.ToArray()) + "]";
-        } catch {
+        } catch (Exception ex) {
             return "[]";
         }
     }
+
+    public static int SetDefault(int targetIndex) {
+        try {
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+            IMMDeviceCollection collection;
+            enumerator.EnumAudioEndpoints(0, 1, out collection);
+            IMMDevice dev;
+            collection.Item((uint)targetIndex, out dev);
+            string id;
+            dev.GetId(out id);
+
+            var policy = (IPolicyConfig)(new PolicyConfigClient());
+            policy.SetDefaultEndpoint(id, 0); // eConsole
+            policy.SetDefaultEndpoint(id, 1); // eMultimedia
+            policy.SetDefaultEndpoint(id, 2); // eCommunications
+            return 0;
+        } catch (Exception ex) {
+            Console.WriteLine(ex);
+            return -1;
+        }
+    }
 }
-"@
-Add-Type -TypeDefinition $code
-[AudioDeviceFetcher]::GetDevicesJson()
 '''
-        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=10)
-        if res.returncode == 0 and res.stdout.strip():
-            out = res.stdout.strip()
-            devices = json.loads(out)
-            if devices:
-                return devices
-    except Exception as e:
-        print(f"[-] Error getting audio devices via COM: {e}")
 
-    # Fallback to WMI sound devices if COM fails
+def get_audio_devices():
     try:
-        ps_wmi = "Get-CimInstance Win32_SoundDevice | Select-Object Name, Status | ConvertTo-Json"
-        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_wmi], capture_output=True, text=True, timeout=8)
-        if res.returncode == 0 and res.stdout.strip():
-            raw = json.loads(res.stdout.strip())
-            if isinstance(raw, dict):
-                raw = [raw]
-            for idx, dev in enumerate(raw):
-                devices.append({
-                    'index': idx,
-                    'name': dev.get('Name', f'Audio Device {idx+1}'),
-                    'is_default': (idx == 0)
-                })
+        ps_command = f'''
+$code = @'
+{AUDIO_CSHARP_CODE}
+'@
+Add-Type -TypeDefinition $code
+[AudioDeviceHelper]::GetDevicesJson()
+'''
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_command], capture_output=True, text=True, timeout=10)
+        output = res.stdout.strip()
+        if output and output.startswith("["):
+            return json.loads(output)
     except Exception as e:
-        print(f"[-] WMI audio fallback error: {e}")
-
-    return devices
+        print(f"[-] Error fetching audio devices: {e}")
+    return []
 
 def set_audio_device(device_index=None, device_id=None):
-    try:
-        if device_index is not None:
-            ps_script = f"""
-$code = @"
-using System;
-using System.Runtime.InteropServices;
-
-public class AudioPolicyConfigWrapper {{
-    [ComImport, Guid("87009F00-442B-4730-9079-A386C7B846A7")]
-    public class PolicyConfigClient {{ }}
-
-    [Guid("F8679F50-850A-41CF-9C72-430F736873EC"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IPolicyConfig {{
-        int GetPropertyValue();
-        int SetPropertyValue();
-        int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int role);
-    }}
-}}
-"@
-# Alternate method via nircmd or PowerShell SoundVolumeView if available
-"""
-            # Using NirCmd / PowerShell or nircmd substitute via PowerShell AudioDeviceCmdlets if installed or built-in script
-            # Standard Windows Audio Device Switcher PowerShell snippet:
-            ps_script_switch = f"""
-$devs = Get-CimInstance Win32_PNPEntity | Where-Object {{ $_.PNPClass -eq "AudioEndpoint" }}
-# Simple PowerShell audio switch script or standard device enumeration
-"""
-            # Best reliable way on Windows without 3rd party tools: standard AudioDeviceCmdlets or SendKeys/Control Panel or C# PolicyConfig
-            ps_policy_config = f"""
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-
-public class AudioPolicy {{
-    [ComImport, Guid("87009F00-442B-4730-9079-A386C7B846A7")]
-    public class PolicyConfigClient {{ }}
-
-    [Guid("F8679F50-850A-41CF-9C72-430F736873EC"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IPolicyConfig {{
-        int GetPropertyValue();
-        int SetPropertyValue();
-        int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int role);
-    }}
-
-    [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IMMDeviceEnumerator {{
-        int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
-    }}
-
-    [Guid("0BD6A3BA-3330-4830-8964-0888B07D0E86"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IMMDeviceCollection {{
-        int GetCount(out uint count);
-        int Item(uint index, out IMMDevice device);
-    }}
-
-    [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IMMDevice {{
-        int OpenPropertyStore(int stgmAccess, out IPropertyStore properties);
-        int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
-    }}
-
-    [Guid("886D8EEB-8CF2-4446-8D02-CDA103045D7E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IPropertyStore {{ }}
-
-    [ComImport, Guid("BCDE0385-4944-460C-8564-65D99D075681")]
-    public class MMDeviceEnumeratorComObject {{ }}
-
-    public static void SetDefault(int targetIndex) {{
-        var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-        IMMDeviceCollection collection;
-        enumerator.EnumAudioEndpoints(0, 1, out collection);
-        IMMDevice dev;
-        collection.Item((uint)targetIndex, out dev);
-        string id;
-        dev.GetId(out id);
-
-        var policy = (IPolicyConfig)(new PolicyConfigClient());
-        policy.SetDefaultEndpoint(id, 0); // eConsole
-        policy.SetDefaultEndpoint(id, 1); // eMultimedia
-        policy.SetDefaultEndpoint(id, 2); // eCommunications
-    }}
-}}
-"@
-[AudioPolicy]::SetDefault({device_index})
-"""
-            subprocess.run(["powershell", "-Command", ps_policy_config], capture_output=True, timeout=10)
-    except Exception as e:
-        print(f"[-] set_audio_device error: {e}")
-
+    if device_index is not None:
+        try:
+            idx = int(device_index)
+            ps_command = f'''
+$code = @'
+{AUDIO_CSHARP_CODE}
+'@
+Add-Type -TypeDefinition $code
+[AudioDeviceHelper]::SetDefault({idx})
+'''
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_command], capture_output=True, text=True, timeout=10)
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[-] Error setting audio device: {e}")
     return get_audio_devices()
+
+def get_active_processes(limit=None):
+    procs = []
+    try:
+        ps_script = '''
+Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object Id, ProcessName, MainWindowTitle | ConvertTo-Json -Compress
+'''
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=10)
+        output = res.stdout.strip()
+        if output:
+            data = json.loads(output)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                procs.append({
+                    'pid': item.get('Id'),
+                    'name': item.get('ProcessName', ''),
+                    'title': item.get('MainWindowTitle', '')
+                })
+    except Exception as e:
+        print(f"[-] PowerShell process fetch failed: {e}")
+
+    if not procs:
+        try:
+            import psutil
+            for p in psutil.process_iter(['pid', 'name']):
+                try:
+                    name = p.info['name'] or ''
+                    if any(x in name.lower() for x in ['chrome', 'browser', 'telegram', 'discord', 'steam', 'spotify', 'code', 'vlc']):
+                        procs.append({
+                            'pid': p.info['pid'],
+                            'name': name,
+                            'title': name
+                        })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            print(f"[-] psutil process fetch failed: {e}")
+
+    return procs
+
+def send_online_notification():
+    try:
+        payload = {
+            'pc_id': PC_ID,
+            'pc_name': PC_NAME,
+            'status': 'online',
+            'ip': get_local_ip()
+        }
+        r = requests.post(SERVER_URL, data=payload, timeout=10)
+        if r.status_code == 200:
+            print("[+] Online notification sent to hosting server.")
+        else:
+            print(f"[-] Hosting returned status code {r.status_code}")
+    except Exception as e:
+        print(f"[-] Failed to send online notification: {e}")
 
 def take_screenshot_bytes():
     try:
-        screenshot = ImageGrab.grab(all_screens=True)
-        # Convert / Resize if image is too huge for fast transfer over network
-        # Max resolution bound 1920x1080 to send instantly
-        screenshot.thumbnail((1920, 1080))
+        from PIL import ImageGrab
+        import io
+        img = ImageGrab.grab()
         img_byte_arr = io.BytesIO()
-        screenshot.save(img_byte_arr, format='PNG', optimize=True, quality=85)
+        img.save(img_byte_arr, format='PNG', optimize=True)
         return img_byte_arr.getvalue()
     except Exception as e:
         print(f"[-] Screenshot error: {e}")
@@ -337,17 +262,19 @@ def take_screenshot_bytes():
 def send_result(chat_id, text=None, screenshot_bytes=None, proc_list=None, audio_devices=None, msg_id=None):
     try:
         payload = {
-            'agent_result': '1',
             'pc_id': PC_ID,
-            'chat_id': chat_id,
+            'chat_id': chat_id
         }
         if msg_id:
             payload['msg_id'] = msg_id
-        if text:
-            payload['text'] = text
-        
+
         files = None
+        if text:
+            payload['type'] = 'text'
+            payload['text'] = text
+
         if screenshot_bytes:
+            payload['type'] = 'screenshot'
             files = {'screenshot': ('screenshot.png', screenshot_bytes, 'image/png')}
         
         if proc_list is not None:
@@ -368,15 +295,16 @@ def send_result(chat_id, text=None, screenshot_bytes=None, proc_list=None, audio
 
 def get_system_status():
     try:
+        import psutil
         cpu = psutil.cpu_percent(interval=0.5)
         ram = psutil.virtual_memory().percent
         status_text = (
             f"📊 *СТАН ПК {PC_NAME}*\n"
             f"───────────────────────────\n"
             f"💻 *Завантаження ЦП:* `{cpu}%`\n"
-            f"🧠 *ОЗП:* `{ram}%` 사용 중\n"
+            f"🧠 *ОЗП:* `{ram}%`\n"
             f"🌐 *IP:* `{get_local_ip()}`\n"
-            f"⏱️ *Час оновлення:* `{time.strftime('%H:%m:%S')}`"
+            f"⏱️ *Час оновлення:* `{time.strftime('%H:%M:%S')}`"
         )
         return status_text
     except Exception as e:
@@ -423,7 +351,6 @@ def handle_command(cmd):
     elif cmd_name == 'browser_search':
         query = params.get('query', '')
         if query:
-            # Open browser tab, type query and search
             import urllib.parse
             encoded_query = urllib.parse.quote(query)
             search_url = f"https://www.google.com/search?q={encoded_query}"
@@ -476,7 +403,6 @@ def handle_command(cmd):
         ctypes.windll.user32.LockWorkStation()
 
     elif cmd_name == 'unlock':
-        # Send key to wake screen
         pyautogui.press('space')
 
     elif cmd_name == 'hibernate':
@@ -501,6 +427,7 @@ def handle_command(cmd):
         pid = params.get('pid')
         if pid:
             try:
+                import psutil
                 p = psutil.Process(int(pid))
                 p.kill()
                 print(f"[+] Killed PID {pid}")
@@ -514,7 +441,7 @@ def handle_command(cmd):
             ps = '$hwnd = (Get-Process | Where-Object {$_.MainWindowHandle -ne 0} | Select-Object -First 1); if ($hwnd) { Stop-Process -Id $hwnd.Id -Force }'
             subprocess.run(["powershell", "-Command", ps])
         else:
-            os.system(f"taskkill /F /IM \"{target}\" /T")
+            os.system(f'taskkill /F /IM "{target}" /T')
 
         time.sleep(0.3)
         try:
@@ -546,7 +473,6 @@ def main():
 
     while True:
         try:
-            from urllib.parse import quote
             r = requests.get(f"{SERVER_URL}?agent_poll=1&pc_id={quote(PC_ID)}&pc_name={quote(PC_NAME)}", timeout=10)
             if r.status_code == 200:
                 data = r.json()
