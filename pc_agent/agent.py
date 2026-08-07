@@ -625,19 +625,23 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'telegram':
+        # First: try to find and focus an existing Telegram window
         hwnd, title, _ = find_window_by_hints(['telegram'], process_names=['telegram.exe'])
         if hwnd:
             force_foreground(hwnd)
             print(f"[+] Focused Telegram: {title}")
             return
-        if focus_only and is_process_running(['telegram.exe']):
-            return
+        # No visible window found (Telegram may be in system tray or not running).
+        # Launching Telegram.exe again is safe — Telegram is single-instance and will
+        # restore/focus its window if already running, or start fresh if not.
         app_data = os.environ.get('APPDATA', '')
         tg_path = os.path.join(app_data, 'Telegram Desktop', 'Telegram.exe')
         if os.path.exists(tg_path):
             subprocess.Popen([tg_path])
+            print(f"[+] Launched/restored Telegram from: {tg_path}")
         else:
             os.system("start telegram")
+            print("[+] Launched Telegram via start command")
         return
 
     if app == 'discord':
