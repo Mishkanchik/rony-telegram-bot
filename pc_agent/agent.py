@@ -29,6 +29,63 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
+def focus_window_by_keywords(keywords):
+    """
+    Finds a visible window matching any of the keywords in process name or title,
+    and brings it to the foreground (restoring if minimized).
+    """
+    user32 = ctypes.windll.user32
+    target_hwnd = None
+
+    def enum_windows_callback(hwnd, lParam):
+        nonlocal target_hwnd
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                title_buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, title_buf, length + 1)
+                title = title_buf.value.lower()
+
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                proc_name = ""
+                try:
+                    import psutil
+                    proc_name = psutil.Process(pid.value).name().lower()
+                except Exception:
+                    pass
+
+                for kw in keywords:
+                    kw_lower = kw.lower()
+                    if kw_lower in title or kw_lower in proc_name:
+                        target_hwnd = hwnd
+                        return False
+        return True
+
+    try:
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
+
+        if target_hwnd:
+            fore_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+            app_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+            if fore_thread != app_thread:
+                user32.AttachThreadInput(fore_thread, app_thread, True)
+
+            if user32.IsIconic(target_hwnd):
+                user32.ShowWindow(target_hwnd, 9)  # SW_RESTORE
+            else:
+                user32.ShowWindow(target_hwnd, 5)  # SW_SHOW
+            user32.SetForegroundWindow(target_hwnd)
+
+            if fore_thread != app_thread:
+                user32.AttachThreadInput(fore_thread, app_thread, False)
+            return True
+    except Exception as e:
+        print(f"[-] focus_window_by_keywords error: {e}")
+
+    return False
+
 # ---------------------------------------------------------
 # C# Audio Devices Helper (MMDeviceEnumerator & IPolicyConfig)
 # ---------------------------------------------------------
@@ -357,16 +414,54 @@ def handle_command(cmd):
             os.system(f'start "" "{search_url}"')
 
     elif cmd_name == 'open_app':
-        app = params.get('app')
+        app = params.get('app', '').lower()
         yt_url = params.get('yt_url')
-        if app == 'ytmusic' and yt_url:
-            os.system(f'start "" "{yt_url}"')
-        elif app == 'comet':
-            os.system('start "" "comet.exe"')
+
+        if app == 'comet':
+            # Focus running Comet or Browser window first
+            if not focus_window_by_keywords(['comet', 'chrome', 'msedge', 'brave', 'opera', 'firefox']):
+                # If not open, launch Comet executable directly
+                comet_path = os.path.expandvars(r"%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe")
+                if os.path.exists(comet_path):
+                    os.system(f'start "" "{comet_path}"')
+                else:
+                    os.system('start comet')
+
         elif app == 'discord':
-            os.system('start "" "discord.exe"')
+            # Focus running Discord window first
+            if not focus_window_by_keywords(['discord']):
+                # Try protocol handler first
+                os.system('start discord://')
+                time.sleep(0.5)
+                if not focus_window_by_keywords(['discord']):
+                    # Search for Discord executable / launcher
+                    discord_update = os.path.expandvars(r"%LOCALAPPDATA%\Discord\Update.exe")
+                    if os.path.exists(discord_update):
+                        subprocess.Popen([discord_update, "--processStart", "Discord.exe"])
+                    else:
+                        import glob
+                        app_exes = glob.glob(os.path.expandvars(r"%LOCALAPPDATA%\Discord\app-*\Discord.exe"))
+                        if app_exes:
+                            os.system(f'start "" "{app_exes[0]}"')
+                        else:
+                            os.system('start "" "discord.exe"')
+
         elif app == 'steam':
-            os.system('start "" "steam.exe"')
+            # Focus running Steam window first
+            if not focus_window_by_keywords(['steam']):
+                os.system('start steam://open/main')
+
+        elif app == 'ytmusic':
+            if yt_url:
+                os.system(f'start "" "{yt_url}"')
+            else:
+                if not focus_window_by_keywords(['youtube', 'music', 'ytmusic', 'comet', 'chrome', 'msedge', 'brave', 'opera', 'firefox']):
+                    os.system('start https://music.youtube.com')
+
+        else:
+            # Generic fallback: try to focus process matching app name, or start it
+            if not focus_window_by_keywords([app]):
+                os.system(f'start "" "{app}"')
 
     elif cmd_name == 'media':
         action = params.get('action')
