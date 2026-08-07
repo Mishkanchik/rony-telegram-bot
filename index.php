@@ -74,6 +74,16 @@ function savePcsData($pcs) {
     file_put_contents($PCS_FILE, json_encode($pcs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 }
 
+function deletePcData($pcId) {
+    $pcs = getPcsData();
+    if (isset($pcs[$pcId])) {
+        unset($pcs[$pcId]);
+        savePcsData($pcs);
+        return true;
+    }
+    return false;
+}
+
 function getSelectedPcId($chatId) {
     global $USER_PCS_FILE;
     $userPcs = [];
@@ -375,7 +385,8 @@ function getPcsListKeyboard() {
         $isOnline = (time() - ($pc['last_seen'] ?? 0)) < 15;
         $badge = $isOnline ? '🟢 ONLINE' : '🔴 OFFLINE';
         $rows[] = [
-            ['text' => "🖥️ {$pc['name']} ({$badge})", 'callback_data' => "select_pc_{$id}"]
+            ['text' => "🖥️ {$pc['name']} ({$badge})", 'callback_data' => "select_pc_{$id}"],
+            ['text' => "🗑️ Видалити", 'callback_data' => "delete_pc_ask_{$id}"]
         ];
     }
     $rows[] = [
@@ -906,6 +917,39 @@ function handleUpdate($update) {
                 . "───────────────────────────\n"
                 . "Ви обрали `{$st['name']}`. Всі наступні команди будуть відправлятися на цей ПК.";
             editOrSendMessage($chatId, $msgId, $caption, getMainKeyboard($chatId));
+        } elseif (strpos($data, 'delete_pc_ask_') === 0) {
+            $targetPcId = str_replace('delete_pc_ask_', '', $data);
+            $pcs = getPcsData();
+            $targetName = $pcs[$targetPcId]['name'] ?? $targetPcId;
+            logAction($userId, $username, "Requested deletion of PC: $targetPcId");
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
+            $text = "⚠️ *ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ПК*\n"
+                  . "───────────────────────────\n"
+                  . "Ви впевнені, що хочете видалити ПК *{$targetName}* зі списку?\n\n"
+                  . "⚠️ *Зверніть увагу:* Якщо на цьому ПК запущено `agent.py`, він знову з'явиться у списку при наступному опитуванні.";
+            $keyboard = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => "✅ Так, видалити {$targetName}", 'callback_data' => "delete_pc_confirm_{$targetPcId}"],
+                    ],
+                    [
+                        ['text' => "❌ Скасувати", 'callback_data' => 'menu_select_pc']
+                    ]
+                ]
+            ];
+            editOrSendMessage($chatId, $msgId, $text, $keyboard);
+        } elseif (strpos($data, 'delete_pc_confirm_') === 0) {
+            $targetPcId = str_replace('delete_pc_confirm_', '', $data);
+            $pcs = getPcsData();
+            $targetName = $pcs[$targetPcId]['name'] ?? $targetPcId;
+            deletePcData($targetPcId);
+            logAction($userId, $username, "Deleted PC: $targetPcId ($targetName)");
+            telegramApi('answerCallbackQuery', [
+                'callback_query_id' => $cb['id'],
+                'text' => "🗑️ ПК {$targetName} видалено зі списку"
+            ]);
+            $text = "🗑️ ПК *{$targetName}* успішно видалено зі списку.\n\nОберіть ПК зі списку нижче:";
+            editOrSendMessage($chatId, $msgId, $text, getPcsListKeyboard());
         } elseif ($data === 'add_pc_prompt') {
             logAction($userId, $username, "Requested Add PC Instructions");
             $newPcId = 'pc_' . substr(md5(uniqid(mt_rand(), true)), 0, 6);
