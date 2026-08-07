@@ -1027,17 +1027,16 @@ def handle_command(cmd_item):
     elif cmd_name == 'uninstall':
         print("[!] Cleaning up agent files and startup...")
         # Remove startup shortcut
-        startup_path = os.path.join(os.environ.get('APPDATA', ''), r"Microsoft\Windows\Start Menu\Programs\Startup\run_agent.bat")
+        startup_path = os.path.join(os.environ.get('APPDATA', ''), r"Microsoft\Windows\Start Menu\Programs\Startup\RonyPCAgent.vbs")
         if os.path.exists(startup_path):
-            os.remove(startup_path)
-        # Kill all instances of agent.py as well
-        for proc in psutil.process_iter(['name', 'cmdline']):
             try:
-                if proc.info['name'] == 'python.exe' and 'agent.py' in str(proc.info['cmdline']):
-                    proc.terminate()
-            except: pass
-        # Self-delete (limited, but tries to script it)
-        os.system('del /f /q "run_agent.bat"')
+                os.remove(startup_path)
+            except Exception:
+                pass
+        try:
+            subprocess.run('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "RonyPCAgent" /f', shell=True)
+        except Exception:
+            pass
         sys.exit(0)
 
     elif cmd_name == 'shutdown':
