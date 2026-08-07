@@ -16,7 +16,7 @@ import ctypes
 # -------------------------------------------------------------
 SERVER_URL = os.environ.get("SERVER_URL", "https://rony-telegram-bot.onrender.com/").rstrip("/") + "/"
 PC_NAME = os.environ.get("COMPUTERNAME", "UNKNOWN_PC")
-PC_ID = f"{PC_NAME}"
+PC_ID = os.environ.get("PC_ID", "pc_default")
 
 # PyAutoGUI safety configuration
 pyautogui.FAILSAFE = False
