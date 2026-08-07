@@ -230,6 +230,7 @@ BROWSER_PROCESS_NAMES = {
 
 APP_WINDOW_HINTS = {
     'comet': ['comet', 'chrome'],
+    'telegram': ['telegram'],
     'discord': ['discord'],
     'steam': ['steam'],
     'chrome': ['chrome', 'google chrome'],
@@ -621,6 +622,22 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         if focus_only:
             return
         open_in_comet_or_browser("https://google.com")
+        return
+
+    if app == 'telegram':
+        hwnd, title, _ = find_window_by_hints(['telegram'], process_names=['telegram.exe'])
+        if hwnd:
+            force_foreground(hwnd)
+            print(f"[+] Focused Telegram: {title}")
+            return
+        if focus_only and is_process_running(['telegram.exe']):
+            return
+        app_data = os.environ.get('APPDATA', '')
+        tg_path = os.path.join(app_data, 'Telegram Desktop', 'Telegram.exe')
+        if os.path.exists(tg_path):
+            subprocess.Popen([tg_path])
+        else:
+            os.system("start telegram")
         return
 
     if app == 'discord':

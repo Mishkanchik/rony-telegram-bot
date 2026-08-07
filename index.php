@@ -1,7 +1,6 @@
 <?php
 /**
  * ⚡ RONY PC TELEGRAM CONTROL BOT (HOSTING SERVER + LOCAL AGENT BRIDGE) ⚡
- * Розміщується на хостингу (driver.lutsk.ua).
  * Приймає Webhook від Telegram та передає команди на локальний ПК через агента.
  */
 
@@ -423,7 +422,8 @@ function getAppsKeyboard() {
     return [
         'inline_keyboard' => [
             [
-                ['text' => '☄️ Comet Browser', 'callback_data' => 'app_comet']
+                ['text' => '☄️ Comet Browser', 'callback_data' => 'app_comet'],
+                ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
             ],
             [
                 ['text' => '💬 Discord', 'callback_data' => 'app_discord'],
