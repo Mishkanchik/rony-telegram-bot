@@ -230,6 +230,7 @@ BROWSER_PROCESS_NAMES = {
 
 APP_WINDOW_HINTS = {
     'comet': ['comet', 'chrome'],
+    'telegram': ['telegram'],
     'discord': ['discord'],
     'steam': ['steam'],
     'chrome': ['chrome', 'google chrome'],
@@ -572,9 +573,17 @@ def open_in_comet_or_browser(url_or_app, new_window=False):
         if url_or_app.startswith("http://") or url_or_app.startswith("https://"):
             args.append(url_or_app)
         try:
-            subprocess.Popen(args)
-        except Exception:
-            os.system(f'start "" "{comet_exe}" "{url_or_app}"' if url_or_app.startswith("http") else f'start "" "{comet_exe}"')
+            subprocess.Popen(
+                args,
+                cwd=os.path.dirname(comet_exe),
+                creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+            )
+        except Exception as e:
+            print(f"[-] Popen comet failed: {e}, trying os.startfile")
+            try:
+                os.startfile(comet_exe)
+            except Exception:
+                os.system(f'start "" "{comet_exe}" "{url_or_app}"' if url_or_app.startswith("http") else f'start "" "{comet_exe}"')
         return "Comet Browser"
     else:
         if url_or_app.startswith("http://") or url_or_app.startswith("https://"):
@@ -606,21 +615,49 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'comet':
-        # Focus existing Comet window if running
+        # Only Comet — never fall back to Chrome/Edge/etc.
         hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
         if hwnd:
             force_foreground(hwnd)
             print(f"[+] Focused existing Comet: {title}")
+            time.sleep(0.15)
+            press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
             return
-        # If not, find any browser window and bring it to front
-        hwnd, title, pname = find_browser_window(prefer_comet=True)
-        if hwnd:
-            force_foreground(hwnd)
-            print(f"[+] Focused browser: {title}")
+
+        # Comet process may exist without a visible window yet
+        if is_process_running(['comet.exe']):
+            print("[*] Comet process running, waiting for window...")
+            for _ in range(10):
+                time.sleep(0.3)
+                hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
+                if hwnd:
+                    force_foreground(hwnd)
+                    time.sleep(0.15)
+                    press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
+                    return
             return
-        if focus_only:
+
+        # Comet is fully closed — launch it (no URL = restore last session + last active tab)
+        comet_exe = find_comet_exe()
+        if not comet_exe:
+            print("[-] comet.exe not found in known paths")
             return
-        open_in_comet_or_browser("https://google.com")
+        try:
+            # cwd = Application folder so Chromium-based Comet starts correctly
+            subprocess.Popen(
+                [comet_exe],
+                cwd=os.path.dirname(comet_exe),
+                creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+            )
+        except Exception as e:
+            print(f"[-] Popen failed: {e}, trying os.startfile")
+            try:
+                os.startfile(comet_exe)
+            except Exception as e2:
+                print(f"[-] startfile failed: {e2}, trying start cmd")
+                os.system(f'start "" "{comet_exe}"')
+        print(f"[+] Launched Comet: {comet_exe}")
+        return
         return
 
     if app == 'discord':
