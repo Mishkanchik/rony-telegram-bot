@@ -488,21 +488,31 @@ def find_ytmusic_via_tab_cycle(max_tabs=12):
         time.sleep(0.12)
     return False
 
-def find_window_by_hints(hints, process_names=None):
+def find_window_by_hints(hints=None, process_names=None):
     """Find first matching window by title hints and optional process names."""
-    hints_l = [h.lower() for h in hints if h]
+    hints_l = [h.lower() for h in (hints or []) if h]
     process_names_l = {p.lower() for p in (process_names or [])}
+
+    # Ignore IDEs/dev tools that might contain project names in title (e.g. rony-telegram-bot)
+    ignore_title_substrings = [
+        'antigravity', 'visual studio', 'vscode', 'cursor',
+        'pycharm', 'idea', 'sublime', 'rony-telegram-bot'
+    ]
 
     for hwnd, title, pid in enum_windows():
         title_l = title.lower()
         pname = get_process_name(pid)
-        title_ok = any(h in title_l for h in hints_l) if hints_l else True
-        proc_ok = (pname in process_names_l) if process_names_l else True
-        if title_ok and proc_ok:
+
+        # 1. Match by process name if specified
+        if process_names_l and pname in process_names_l:
             return hwnd, title, pname
-        # If only process match requested and no title match needed
-        if process_names_l and pname in process_names_l and not hints_l:
+
+        # 2. Match by title hint (excluding IDE titles)
+        if hints_l and any(h in title_l for h in hints_l):
+            if any(ign in title_l for ign in ignore_title_substrings):
+                continue
             return hwnd, title, pname
+
     return None, None, None
 
 def find_browser_window(prefer_comet=True):
