@@ -872,7 +872,11 @@ function handleUpdate($update) {
 
         $msgId = $cb['message']['message_id'] ?? null;
 
-        if ($data === 'menu_main') {
+        if ($data === 'app_browser') {
+            logAction($userId, $username, "Command: Open Browser");
+            addCommandToQueue('open_app', $chatId, ['app' => 'browser']);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '🌐 Відкриваю браузер...']);
+        } elseif ($data === 'menu_main') {
             logAction($userId, $username, "Navigated Main Menu");
             setSearchState($chatId, false);
             $pcId = getSelectedPcId($chatId);
