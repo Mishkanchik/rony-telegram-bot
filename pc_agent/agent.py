@@ -435,7 +435,20 @@ def force_foreground(hwnd):
         else:
             user32.ShowWindow(hwnd, 5)  # SW_SHOW
 
-        # SwitchToThisWindow brings window to front even if in background
+        # Attempt to steal focus
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        
+        # Try to allow target process to set foreground
+        try:
+            ctypes.windll.user32.AttachThreadInput(
+                ctypes.windll.kernel32.GetCurrentThreadId(),
+                user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None),
+                True
+            )
+        except Exception:
+            pass
+
         try:
             user32.SwitchToThisWindow(hwnd, True)
         except Exception:
@@ -443,6 +456,15 @@ def force_foreground(hwnd):
 
         user32.BringWindowToTop(hwnd)
         user32.SetForegroundWindow(hwnd)
+
+        try:
+            ctypes.windll.user32.AttachThreadInput(
+                ctypes.windll.kernel32.GetCurrentThreadId(),
+                user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None),
+                False
+            )
+        except Exception:
+            pass
 
         # Temporary TopMost flag trick to force window above all other windows
         HWND_TOPMOST = -1
