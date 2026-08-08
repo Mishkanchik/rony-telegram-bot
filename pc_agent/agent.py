@@ -616,7 +616,8 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
 
     if app == 'comet':
         # Only Comet — never fall back to Chrome/Edge/etc.
-        hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
+        # Search by process name only (comet.exe), title may not contain "comet"
+        hwnd, title, pname = find_window_by_hints([], process_names=['comet.exe'])
         if hwnd:
             force_foreground(hwnd)
             print(f"[+] Focused existing Comet: {title}")
@@ -629,7 +630,7 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
             print("[*] Comet process running, waiting for window...")
             for _ in range(10):
                 time.sleep(0.3)
-                hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
+                hwnd, title, pname = find_window_by_hints([], process_names=['comet.exe'])
                 if hwnd:
                     force_foreground(hwnd)
                     time.sleep(0.15)
@@ -657,7 +658,6 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
                 print(f"[-] startfile failed: {e2}, trying start cmd")
                 os.system(f'start "" "{comet_exe}"')
         print(f"[+] Launched Comet: {comet_exe}")
-        return
         return
 
     if app == 'discord':
