@@ -623,8 +623,7 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
             time.sleep(0.15)
             press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
             return
-        if focus_only:
-            return
+        # If Comet is not running at all, launch Comet
         open_in_comet_or_browser("https://google.com")
         return
 
