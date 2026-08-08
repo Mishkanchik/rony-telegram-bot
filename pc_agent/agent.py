@@ -515,28 +515,32 @@ def find_window_by_hints(hints=None, process_names=None):
     hints_l = [h.lower() for h in (hints or []) if h]
     process_names_l = {p.lower() for p in (process_names or [])}
 
-    # Ignore IDEs/dev tools that might contain project names in title (e.g. rony-telegram-bot)
+    # Explicitly blacklisted process names and title substrings
+    ignored_proc_names = {'devenv.exe', 'code.exe', 'cursor.exe', 'pycharm64.exe'}
     ignore_title_substrings = [
         'antigravity', 'visual studio', 'vscode', 'cursor',
-        'pycharm', 'idea', 'sublime', 'rony-telegram-bot'
+        'pycharm', 'idea', 'rony-telegram-bot'
     ]
 
     for hwnd, title, pid in enum_windows():
         title_l = title.lower()
         pname = get_process_name(pid)
 
-        # 1. Hard-coded priority: Telegram is always 'telegram.exe'
-        if 'telegram' in hints_l and pname == 'telegram.exe':
-            return hwnd, title, pname
+        if pname in ignored_proc_names or any(ign in title_l for ign in ignore_title_substrings):
+            continue
 
-        # 2. Match by process name if specified
+        # If searching for telegram, STRICTLY check process name
+        if 'telegram' in hints_l:
+            if pname == 'telegram.exe':
+                return hwnd, title, pname
+            continue
+
+        # Match by process name
         if process_names_l and pname in process_names_l:
             return hwnd, title, pname
 
-        # 3. Match by title hint (excluding IDE titles)
+        # Match by title hint
         if hints_l and any(h in title_l for h in hints_l):
-            if any(ign in title_l for ign in ignore_title_substrings):
-                continue
             return hwnd, title, pname
 
     return None, None, None
