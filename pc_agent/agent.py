@@ -525,11 +525,15 @@ def find_window_by_hints(hints=None, process_names=None):
         title_l = title.lower()
         pname = get_process_name(pid)
 
-        # 1. Match by process name if specified
+        # 1. Hard-coded priority: Telegram is always 'telegram.exe'
+        if 'telegram' in hints_l and pname == 'telegram.exe':
+            return hwnd, title, pname
+
+        # 2. Match by process name if specified
         if process_names_l and pname in process_names_l:
             return hwnd, title, pname
 
-        # 2. Match by title hint (excluding IDE titles)
+        # 3. Match by title hint (excluding IDE titles)
         if hints_l and any(h in title_l for h in hints_l):
             if any(ign in title_l for ign in ignore_title_substrings):
                 continue
