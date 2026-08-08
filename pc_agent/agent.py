@@ -419,48 +419,45 @@ def get_active_processes(limit=None):
     return processes
 
 def force_foreground(hwnd):
-    """Bring window to foreground reliably on Windows."""
+    """Bring window to foreground reliably on Windows on top of all windows without side effects."""
     try:
-        # Allow this process to set foreground
+        if not hwnd or not user32.IsWindow(hwnd):
+            return False
+
         try:
             user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
         except Exception:
             pass
 
+        # If iconic (minimized), restore window
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
         else:
             user32.ShowWindow(hwnd, 5)  # SW_SHOW
 
-        foreground = user32.GetForegroundWindow()
-        current_thread = kernel32.GetCurrentThreadId()
-        foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
-        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
-
-        attached_fg = False
-        attached_tg = False
-        if foreground_thread and foreground_thread != current_thread:
-            attached_fg = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
-        if target_thread and target_thread != current_thread and target_thread != foreground_thread:
-            attached_tg = bool(user32.AttachThreadInput(current_thread, target_thread, True))
+        # SwitchToThisWindow brings window to front even if in background
+        try:
+            user32.SwitchToThisWindow(hwnd, True)
+        except Exception:
+            pass
 
         user32.BringWindowToTop(hwnd)
         user32.SetForegroundWindow(hwnd)
-        user32.SetActiveWindow(hwnd)
-        user32.SetFocus(hwnd)
 
-        if attached_tg:
-            user32.AttachThreadInput(current_thread, target_thread, False)
-        if attached_fg:
-            user32.AttachThreadInput(current_thread, foreground_thread, False)
+        # Temporary TopMost flag trick to force window above all other windows
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
 
-        # Alt key trick sometimes unlocks foreground lock
-        if user32.GetForegroundWindow() != hwnd:
-            press_key(0x12, extended=False)  # VK_MENU / Alt
-            user32.SetForegroundWindow(hwnd)
+        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        user32.SetForegroundWindow(hwnd)
 
         time.sleep(0.05)
-        return user32.GetForegroundWindow() == hwnd
+        return True
     except Exception as e:
         print(f"[-] force_foreground error: {e}")
         return False
@@ -607,17 +604,15 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'comet':
-        # Focus existing Comet window if running
-        hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
+        hwnd, title, pname = find_window_by_hints(process_names=['comet.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused existing Comet: {title}")
+            print(f"[+] Focused Comet window: {title}")
             return
-        # If not, find any browser window and bring it to front
         hwnd, title, pname = find_browser_window(prefer_comet=True)
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused browser: {title}")
+            print(f"[+] Focused browser window: {title}")
             return
         if focus_only:
             return
@@ -625,15 +620,11 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'telegram':
-        # First: try to find and focus an existing Telegram window
-        hwnd, title, _ = find_window_by_hints(['telegram'], process_names=['telegram.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['telegram.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Telegram: {title}")
+            print(f"[+] Focused Telegram window: {title}")
             return
-        # No visible window found (Telegram may be in system tray or not running).
-        # Launching Telegram.exe again is safe — Telegram is single-instance and will
-        # restore/focus its window if already running, or start fresh if not.
         app_data = os.environ.get('APPDATA', '')
         tg_path = os.path.join(app_data, 'Telegram Desktop', 'Telegram.exe')
         if os.path.exists(tg_path):
@@ -645,13 +636,12 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'discord':
-        hwnd, title, _ = find_window_by_hints(['discord'], process_names=['discord.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['discord.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Discord: {title}")
+            print(f"[+] Focused Discord window: {title}")
             return
         if focus_only and is_process_running(['discord.exe']):
-            # Process exists but no main window yet
             return
         local_data = os.environ.get('LOCALAPPDATA', '')
         update_exe = os.path.join(local_data, 'Discord', 'Update.exe')
@@ -665,18 +655,19 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'steam':
-        hwnd, title, _ = find_window_by_hints(['steam'], process_names=['steam.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['steam.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Steam: {title}")
+            print(f"[+] Focused Steam window: {title}")
             return
         os.system("start steam://open/main")
         return
 
     if app == 'chrome':
-        hwnd, title, _ = find_window_by_hints(['chrome', 'google chrome'], process_names=['chrome.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['chrome.exe'])
         if hwnd:
             force_foreground(hwnd)
+            print(f"[+] Focused Chrome window: {title}")
             return
         os.system("start chrome")
         return
