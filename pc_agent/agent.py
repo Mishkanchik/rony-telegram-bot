@@ -623,8 +623,17 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
             time.sleep(0.15)
             press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
             return
-        # If Comet is not running at all, launch Comet
-        open_in_comet_or_browser("https://google.com")
+        # Comet not running: launch without URL so it restores last session + last active tab
+        comet_exe = find_comet_exe()
+        if comet_exe:
+            try:
+                subprocess.Popen([comet_exe])
+            except Exception:
+                os.system(f'start "" "{comet_exe}"')
+            print("[+] Launched Comet (restoring last active tab)")
+        else:
+            open_in_comet_or_browser("")
+            print("[+] Launched default browser (Comet not found)")
         return
 
     if app == 'telegram':
