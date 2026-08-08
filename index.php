@@ -423,7 +423,7 @@ function getAppsKeyboard() {
     return [
         'inline_keyboard' => [
             [
-                ['text' => '☄️ Comet Browser', 'callback_data' => 'app_comet'],
+                ['text' => '☄️ Browser', 'callback_data' => 'app_comet'],
                 ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
             ],
             [
@@ -431,7 +431,7 @@ function getAppsKeyboard() {
                 ['text' => '🎮 Steam', 'callback_data' => 'app_steam']
             ],
             [
-                ['text' => '🎧 YT Music (відкрити в Comet)', 'callback_data' => 'app_ytmusic']
+                ['text' => '🎧 YT Music (відкрити в Browser)', 'callback_data' => 'app_ytmusic']
             ],
             [
                 ['text' => '« Назад у головне меню', 'callback_data' => 'menu_main']
