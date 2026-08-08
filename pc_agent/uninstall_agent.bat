@@ -11,7 +11,7 @@ echo.
 echo 🛑 [1/3] Зупинка працюючого агента та процесів Python...
 taskkill /F /FI "WINDOWTITLE eq Rony PC Local Agent*" /T >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq Встановлення Rony PC Agent*" /T >nul 2>&1
-wmic process where "commandline like '%%agent.py%%'" call terminate >nul 2>&1
+powershell -Command "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%%agent.py%%'\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
 
 echo ⚙️ [2/3] Видалення з Автозавантаження Windows (Startup & Registry)...
 set STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup

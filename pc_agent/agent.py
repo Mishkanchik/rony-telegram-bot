@@ -222,13 +222,14 @@ KEYEVENTF_KEYUP = 0x0002
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-# Browser process names (Comet is Chromium-based)
+# Browser process names (Comet/Браузер is Chromium-based)
 BROWSER_PROCESS_NAMES = {
     'comet.exe', 'chrome.exe', 'msedge.exe', 'brave.exe',
     'opera.exe', 'firefox.exe', 'chromium.exe'
 }
 
 APP_WINDOW_HINTS = {
+    'browser': ['comet', 'chrome', 'edge', 'brave', 'opera', 'firefox', 'browser'],
     'comet': ['comet', 'chrome'],
     'telegram': ['telegram'],
     'discord': ['discord'],
@@ -419,48 +420,57 @@ def get_active_processes(limit=None):
     return processes
 
 def force_foreground(hwnd):
-    """Bring window to foreground reliably on Windows."""
+    """Bring window to foreground reliably on Windows on top of all windows without side effects."""
     try:
-        # Allow this process to set foreground
+        if not hwnd or not user32.IsWindow(hwnd):
+            return False
+
         try:
             user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
         except Exception:
             pass
 
+        # If iconic (minimized), restore window
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
         else:
             user32.ShowWindow(hwnd, 5)  # SW_SHOW
 
-        foreground = user32.GetForegroundWindow()
-        current_thread = kernel32.GetCurrentThreadId()
-        foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
-        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        # Attempt to steal focus
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        
+        # Try to allow target process to set foreground
+        try:
+            ctypes.windll.user32.AttachThreadInput(
+                ctypes.windll.kernel32.GetCurrentThreadId(),
+                user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None),
+                True
+            )
+        except Exception:
+            pass
 
-        attached_fg = False
-        attached_tg = False
-        if foreground_thread and foreground_thread != current_thread:
-            attached_fg = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
-        if target_thread and target_thread != current_thread and target_thread != foreground_thread:
-            attached_tg = bool(user32.AttachThreadInput(current_thread, target_thread, True))
+        try:
+            user32.SwitchToThisWindow(hwnd, True)
+        except Exception:
+            pass
 
         user32.BringWindowToTop(hwnd)
         user32.SetForegroundWindow(hwnd)
-        user32.SetActiveWindow(hwnd)
-        user32.SetFocus(hwnd)
 
-        if attached_tg:
-            user32.AttachThreadInput(current_thread, target_thread, False)
-        if attached_fg:
-            user32.AttachThreadInput(current_thread, foreground_thread, False)
+        try:
+            ctypes.windll.user32.AttachThreadInput(
+                ctypes.windll.kernel32.GetCurrentThreadId(),
+                user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None),
+                False
+            )
+        except Exception:
+            pass
 
-        # Alt key trick sometimes unlocks foreground lock
-        if user32.GetForegroundWindow() != hwnd:
-            press_key(0x12, extended=False)  # VK_MENU / Alt
-            user32.SetForegroundWindow(hwnd)
-
+        # Simple, non-intrusive focus
+        user32.SetForegroundWindow(hwnd)
         time.sleep(0.05)
-        return user32.GetForegroundWindow() == hwnd
+        return True
     except Exception as e:
         print(f"[-] force_foreground error: {e}")
         return False
@@ -491,21 +501,39 @@ def find_ytmusic_via_tab_cycle(max_tabs=12):
         time.sleep(0.12)
     return False
 
-def find_window_by_hints(hints, process_names=None):
+def find_window_by_hints(hints=None, process_names=None):
     """Find first matching window by title hints and optional process names."""
-    hints_l = [h.lower() for h in hints if h]
+    hints_l = [h.lower() for h in (hints or []) if h]
     process_names_l = {p.lower() for p in (process_names or [])}
+
+    # Explicitly blacklisted process names and title substrings
+    ignored_proc_names = {'devenv.exe', 'code.exe', 'cursor.exe', 'pycharm64.exe'}
+    ignore_title_substrings = [
+        'antigravity', 'visual studio', 'vscode', 'cursor',
+        'pycharm', 'idea', 'rony-telegram-bot'
+    ]
 
     for hwnd, title, pid in enum_windows():
         title_l = title.lower()
         pname = get_process_name(pid)
-        title_ok = any(h in title_l for h in hints_l) if hints_l else True
-        proc_ok = (pname in process_names_l) if process_names_l else True
-        if title_ok and proc_ok:
+
+        if pname in ignored_proc_names or any(ign in title_l for ign in ignore_title_substrings):
+            continue
+
+        # If searching for telegram, STRICTLY check process name
+        if 'telegram' in hints_l:
+            if pname == 'telegram.exe':
+                return hwnd, title, pname
+            continue
+
+        # Match by process name
+        if process_names_l and pname in process_names_l:
             return hwnd, title, pname
-        # If only process match requested and no title match needed
-        if process_names_l and pname in process_names_l and not hints_l:
+
+        # Match by title hint
+        if hints_l and any(h in title_l for h in hints_l):
             return hwnd, title, pname
+
     return None, None, None
 
 def find_browser_window(prefer_comet=True):
@@ -573,17 +601,9 @@ def open_in_comet_or_browser(url_or_app, new_window=False):
         if url_or_app.startswith("http://") or url_or_app.startswith("https://"):
             args.append(url_or_app)
         try:
-            subprocess.Popen(
-                args,
-                cwd=os.path.dirname(comet_exe),
-                creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
-            )
-        except Exception as e:
-            print(f"[-] Popen comet failed: {e}, trying os.startfile")
-            try:
-                os.startfile(comet_exe)
-            except Exception:
-                os.system(f'start "" "{comet_exe}" "{url_or_app}"' if url_or_app.startswith("http") else f'start "" "{comet_exe}"')
+            subprocess.Popen(args)
+        except Exception:
+            os.system(f'start "" "{comet_exe}" "{url_or_app}"' if url_or_app.startswith("http") else f'start "" "{comet_exe}"')
         return "Comet Browser"
     else:
         if url_or_app.startswith("http://") or url_or_app.startswith("https://"):
@@ -614,60 +634,40 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         print(f"[+] Launched YouTube Music via browser: {yt_url}")
         return
 
-    if app == 'comet':
-        # Only Comet — never fall back to Chrome/Edge/etc.
-        # Search by process name only (comet.exe), title may not contain "comet"
-        hwnd, title, pname = find_window_by_hints([], process_names=['comet.exe'])
+    if app in ('browser', 'comet'):
+        hwnd, title, pname = find_browser_window(prefer_comet=True)
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused existing Comet: {title}")
-            time.sleep(0.15)
-            press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
+            print(f"[+] Focused existing browser window: {title} ({pname})")
             return
+        if focus_only:
+            return
+        open_in_comet_or_browser("https://google.com")
+        return
 
-        # Comet process may exist without a visible window yet
-        if is_process_running(['comet.exe']):
-            print("[*] Comet process running, waiting for window...")
-            for _ in range(10):
-                time.sleep(0.3)
-                hwnd, title, pname = find_window_by_hints([], process_names=['comet.exe'])
-                if hwnd:
-                    force_foreground(hwnd)
-                    time.sleep(0.15)
-                    press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
-                    return
+    if app == 'telegram':
+        hwnd, title, _ = find_window_by_hints(process_names=['telegram.exe'])
+        if hwnd:
+            force_foreground(hwnd)
+            print(f"[+] Focused Telegram window: {title}")
             return
-
-        # Comet is fully closed — launch it (no URL = restore last session + last active tab)
-        comet_exe = find_comet_exe()
-        if not comet_exe:
-            print("[-] comet.exe not found in known paths")
-            return
-        try:
-            # cwd = Application folder so Chromium-based Comet starts correctly
-            subprocess.Popen(
-                [comet_exe],
-                cwd=os.path.dirname(comet_exe),
-                creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
-            )
-        except Exception as e:
-            print(f"[-] Popen failed: {e}, trying os.startfile")
-            try:
-                os.startfile(comet_exe)
-            except Exception as e2:
-                print(f"[-] startfile failed: {e2}, trying start cmd")
-                os.system(f'start "" "{comet_exe}"')
-        print(f"[+] Launched Comet: {comet_exe}")
+        app_data = os.environ.get('APPDATA', '')
+        tg_path = os.path.join(app_data, 'Telegram Desktop', 'Telegram.exe')
+        if os.path.exists(tg_path):
+            subprocess.Popen([tg_path])
+            print(f"[+] Launched/restored Telegram from: {tg_path}")
+        else:
+            os.system("start telegram")
+            print("[+] Launched Telegram via start command")
         return
 
     if app == 'discord':
-        hwnd, title, _ = find_window_by_hints(['discord'], process_names=['discord.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['discord.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Discord: {title}")
+            print(f"[+] Focused Discord window: {title}")
             return
         if focus_only and is_process_running(['discord.exe']):
-            # Process exists but no main window yet
             return
         local_data = os.environ.get('LOCALAPPDATA', '')
         update_exe = os.path.join(local_data, 'Discord', 'Update.exe')
@@ -681,18 +681,19 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'steam':
-        hwnd, title, _ = find_window_by_hints(['steam'], process_names=['steam.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['steam.exe'])
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused Steam: {title}")
+            print(f"[+] Focused Steam window: {title}")
             return
         os.system("start steam://open/main")
         return
 
     if app == 'chrome':
-        hwnd, title, _ = find_window_by_hints(['chrome', 'google chrome'], process_names=['chrome.exe'])
+        hwnd, title, _ = find_window_by_hints(process_names=['chrome.exe'])
         if hwnd:
             force_foreground(hwnd)
+            print(f"[+] Focused Chrome window: {title}")
             return
         os.system("start chrome")
         return

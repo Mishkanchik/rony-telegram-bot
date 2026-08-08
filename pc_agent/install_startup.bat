@@ -12,14 +12,24 @@ set STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 set SHORTCUT_VBS=%STARTUP_FOLDER%\RonyPCAgent.vbs
 set AGENT_PATH=%~dp0agent.py
 
-echo ⚙️ [1/2] Створення файлу автозапуску у Startup...
+echo ⚙️ [1/2] Пошук Python у системі...
 
-echo Set WshShell = CreateObject("WScript.Shell") > "%SHORTCUT_VBS%"
-echo WshShell.Run "pythonw """"%AGENT_PATH%""""", 0, False >> "%SHORTCUT_VBS%"
+set PYTHONW_CMD=pythonw.exe
+for /f "delims=" %%I in ('where pythonw 2^>nul') do set PYTHONW_CMD=%%I
+if "%PYTHONW_CMD%"=="pythonw.exe" (
+    for /f "delims=" %%I in ('where python 2^>nul') do set PYTHONW_CMD=%%~dpIpythonw.exe
+)
+
+echo ⚙️ [2/2] Створення VBS-автозапуску...
+
+(
+echo Set WshShell = CreateObject("WScript.Shell"^)
+echo WshShell.Run Chr(34^) ^& "%PYTHONW_CMD%" ^& Chr(34^) ^& " " ^& Chr(34^) ^& "%AGENT_PATH%" ^& Chr(34^), 0, False
+) > "%SHORTCUT_VBS%"
 
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "RonyPCAgent" /t REG_SZ /d "wscript.exe \"%SHORTCUT_VBS%\"" /f >nul 2>&1
 
-echo 🟢 [2/2] Запуск агента у фоновому режимі...
+echo 🟢 Запуск агента у фоновому режимі...
 wscript.exe "%SHORTCUT_VBS%"
 
 echo.
