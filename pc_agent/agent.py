@@ -466,18 +466,8 @@ def force_foreground(hwnd):
         except Exception:
             pass
 
-        # Temporary TopMost flag trick to force window above all other windows
-        HWND_TOPMOST = -1
-        HWND_NOTOPMOST = -2
-        SWP_NOMOVE = 0x0002
-        SWP_NOSIZE = 0x0001
-        SWP_SHOWWINDOW = 0x0040
-        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
-
-        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        # Simple, non-intrusive focus
         user32.SetForegroundWindow(hwnd)
-
         time.sleep(0.05)
         return True
     except Exception as e:
