@@ -229,6 +229,7 @@ BROWSER_PROCESS_NAMES = {
 }
 
 APP_WINDOW_HINTS = {
+    'browser': ['comet', 'chrome', 'edge', 'brave', 'opera', 'firefox', 'browser'],
     'comet': ['comet', 'chrome'],
     'telegram': ['telegram'],
     'discord': ['discord'],
@@ -633,16 +634,11 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         print(f"[+] Launched YouTube Music via browser: {yt_url}")
         return
 
-    if app == 'comet':
-        hwnd, title, pname = find_window_by_hints(process_names=['comet.exe'])
-        if hwnd:
-            force_foreground(hwnd)
-            print(f"[+] Focused Comet window: {title}")
-            return
+    if app in ('browser', 'comet'):
         hwnd, title, pname = find_browser_window(prefer_comet=True)
         if hwnd:
             force_foreground(hwnd)
-            print(f"[+] Focused browser window: {title}")
+            print(f"[+] Focused existing browser window: {title} ({pname})")
             return
         if focus_only:
             return
