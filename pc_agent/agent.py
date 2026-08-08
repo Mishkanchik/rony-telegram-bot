@@ -210,13 +210,152 @@ def browser_search(query):
     type_text(f"https://www.google.com/search?q={query}")
     press_key(VK_RETURN)
 
+def take_screenshot():
+    try:
+        shot_path = os.path.join(os.path.dirname(__file__), 'screenshot_temp.png')
+        img = ImageGrab.grab()
+        img.save(shot_path)
+        return shot_path
+    except Exception as e:
+        print(f"[-] Error taking screenshot: {e}")
+        return None
+
+def get_system_status():
+    try:
+        cpu = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory()
+        disk = psutil.disk_usage('C:\\')
+        uptime_seconds = int(time.time() - psutil.boot_time())
+        hours = uptime_seconds // 3600
+        minutes = (uptime_seconds % 3600) // 60
+        
+        status_text = (
+            f"📊 *СТАН ПК ({PC_NAME})*\n"
+            f"───────────────────────────\n"
+            f"💻 *Завантаження ЦП:* `{cpu}%` \n"
+            f"🧠 *ОЗУ:* `{ram.percent}%` ({round(ram.used / (1024**3), 1)}GB / {round(ram.total / (1024**3), 1)}GB)\n"
+            f"💾 *Диск C:* `{disk.percent}%` ({round(disk.free / (1024**3), 1)}GB вільно)\n"
+            f"⏱️ *Час роботи:* `{hours}г {minutes}хв`\n"
+            f"───────────────────────────"
+        )
+        return status_text
+    except Exception as e:
+        return f"📊 *СТАН ПК:* Помилка отримання даних: {e}"
+
+def get_running_processes():
+    procs = []
+    for p in psutil.process_iter(['pid', 'name']):
+        try:
+            name = p.info['name']
+            if not name: continue
+            pid = p.info['pid']
+            procs.append({'pid': pid, 'name': name, 'title': name})
+        except: pass
+    return sorted(procs, key=lambda x: x['name'].lower())
+
+def media_control(action):
+    if action == 'play' or action == 'music_play': press_key(VK_MEDIA_PLAY_PAUSE)
+    elif action == 'prev' or action == 'music_prev': press_key(VK_MEDIA_PREV_TRACK)
+    elif action == 'next' or action == 'music_next': press_key(VK_MEDIA_NEXT_TRACK)
+    elif action == 'vup': press_key(VK_VOLUME_UP)
+    elif action == 'vdown': press_key(VK_VOLUME_DOWN)
+    elif action == 'mute': press_key(VK_VOLUME_MUTE)
+    elif action == 'fullscreen': press_key(VK_F)
+    elif action == 'rewind': press_key(VK_LEFT)
+    elif action == 'forward': press_key(VK_RIGHT)
+    elif action == 'scroll_up': press_key(0x26) # Up arrow
+    elif action == 'scroll_down': press_key(0x28) # Down arrow
+
+def send_result_to_server(chat_id, text=None, result_type=None, shot_path=None, extra_params=None):
+    try:
+        data = {
+            'agent_result': '1',
+            'pc_id': PC_ID,
+            'chat_id': chat_id
+        }
+        if text: data['text'] = text
+        if result_type: data['type'] = result_type
+        if extra_params: data.update(extra_params)
+
+        files = {}
+        if shot_path and os.path.exists(shot_path):
+            files['screenshot'] = open(shot_path, 'rb')
+
+        requests.post(SERVER_URL, data=data, files=files if files else None, timeout=15)
+
+        if files:
+            files['screenshot'].close()
+            try: os.remove(shot_path)
+            except: pass
+    except Exception as e:
+        print(f"[-] Error sending result to server: {e}")
+
 def handle_command(cmd_item):
     cmd = cmd_item.get('command')
+    chat_id = cmd_item.get('chat_id')
     params = cmd_item.get('params', {})
-    if cmd == 'open_app': focus_or_open_app(params.get('app'), params.get('yt_url'))
-    elif cmd == 'browser_tab': browser_tab_action(params.get('action'))
-    elif cmd == 'browser_search': browser_search(params.get('query'))
-    elif cmd == 'msg': subprocess.run(f'msg * "{params.get("text")}"', shell=True)
+    print(f"[*] Processing command: {cmd} with params: {params}")
+
+    if cmd == 'open_app':
+        focus_or_open_app(params.get('app'), params.get('yt_url'))
+    elif cmd == 'browser_tab':
+        browser_tab_action(params.get('action'))
+    elif cmd == 'browser_search':
+        browser_search(params.get('query'))
+    elif cmd == 'screenshot':
+        shot_path = take_screenshot()
+        send_result_to_server(chat_id, shot_path=shot_path, extra_params={'msg_id': params.get('msg_id')})
+    elif cmd == 'status':
+        status_text = get_system_status()
+        send_result_to_server(chat_id, text=status_text)
+    elif cmd == 'get_processes':
+        procs = get_running_processes()
+        send_result_to_server(chat_id, result_type='processes', extra_params={
+            'procs_json': json.dumps(procs),
+            'page': params.get('page', 1),
+            'msg_id': params.get('msg_id')
+        })
+    elif cmd == 'kill_app':
+        pid = params.get('pid')
+        target = params.get('target')
+        if pid:
+            try: psutil.Process(pid).kill()
+            except: pass
+        elif target:
+            os.system(f'taskkill /F /IM "{target}*" /T')
+        # Send updated processes back
+        procs = get_running_processes()
+        send_result_to_server(chat_id, result_type='processes', extra_params={
+            'procs_json': json.dumps(procs),
+            'page': params.get('page', 1),
+            'msg_id': params.get('msg_id')
+        })
+    elif cmd == 'media':
+        media_control(params.get('action'))
+    elif cmd == 'get_audio_devices':
+        devices = get_audio_devices()
+        send_result_to_server(chat_id, result_type='audio_devices', extra_params={
+            'audio_devices_json': json.dumps(devices),
+            'msg_id': params.get('msg_id')
+        })
+    elif cmd == 'set_audio_device':
+        devices = set_audio_device(device_index=params.get('device_index'))
+        send_result_to_server(chat_id, result_type='audio_devices', extra_params={
+            'audio_devices_json': json.dumps(devices),
+            'msg_id': params.get('msg_id')
+        })
+    elif cmd == 'shutdown':
+        os.system('shutdown /s /t 5')
+    elif cmd == 'sleep':
+        os.system('rundll32.exe powrprof.dll,SetSuspendState 0,1,0')
+    elif cmd == 'reboot':
+        os.system('shutdown /r /t 5')
+    elif cmd == 'lock':
+        ctypes.windll.user32.LockWorkStation()
+    elif cmd == 'cmd':
+        subprocess.run(params.get('command'), shell=True)
+    elif cmd == 'msg':
+        subprocess.run(f'msg * "{params.get("text")}"', shell=True)
 
 def main():
     while True:
