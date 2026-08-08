@@ -230,7 +230,6 @@ BROWSER_PROCESS_NAMES = {
 
 APP_WINDOW_HINTS = {
     'comet': ['comet', 'chrome'],
-    'telegram': ['telegram'],
     'discord': ['discord'],
     'steam': ['steam'],
     'chrome': ['chrome', 'google chrome'],
@@ -607,49 +606,21 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
         return
 
     if app == 'comet':
-        # Focus existing Comet window if running and switch to previous tab
+        # Focus existing Comet window if running
         hwnd, title, pname = find_window_by_hints(['comet'], process_names=['comet.exe'])
         if hwnd:
             force_foreground(hwnd)
             print(f"[+] Focused existing Comet: {title}")
-            time.sleep(0.15)
-            press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
             return
         # If not, find any browser window and bring it to front
         hwnd, title, pname = find_browser_window(prefer_comet=True)
         if hwnd:
             force_foreground(hwnd)
             print(f"[+] Focused browser: {title}")
-            time.sleep(0.15)
-            press_hotkey(VK_CONTROL, VK_SHIFT, VK_TAB)
             return
-        # Comet not running: launch without URL so it restores last session + last active tab
-        comet_exe = find_comet_exe()
-        if comet_exe:
-            try:
-                subprocess.Popen([comet_exe])
-            except Exception:
-                os.system(f'start "" "{comet_exe}"')
-            print("[+] Launched Comet (restoring last active tab)")
-        else:
-            open_in_comet_or_browser("")
-            print("[+] Launched default browser (Comet not found)")
-        return
-
-    if app == 'telegram':
-        hwnd, title, _ = find_window_by_hints(['telegram'], process_names=['telegram.exe'])
-        if hwnd:
-            force_foreground(hwnd)
-            print(f"[+] Focused Telegram: {title}")
+        if focus_only:
             return
-        if focus_only and is_process_running(['telegram.exe']):
-            return
-        app_data = os.environ.get('APPDATA', '')
-        tg_path = os.path.join(app_data, 'Telegram Desktop', 'Telegram.exe')
-        if os.path.exists(tg_path):
-            subprocess.Popen([tg_path])
-        else:
-            os.system("start telegram")
+        open_in_comet_or_browser("https://google.com")
         return
 
     if app == 'discord':
