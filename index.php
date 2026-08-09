@@ -724,6 +724,84 @@ if (isset($_POST['agent_result'])) {
             if (isset($res['result']['message_id'])) {
                 setLastMenuId($chatId, $res['result']['message_id']);
             }
+        } else if (isset($_POST['type']) && $_POST['type'] === 'apps' && isset($_POST['procs_json'])) {
+            $procs = json_decode($_POST['procs_json'], true) ?: [];
+            
+            $page = isset($_POST['page']) ? (int)$_POST['page'] : 1;
+            $perPage = 10;
+            $totalProcs = count($procs);
+            $totalPages = ceil($totalProcs / $perPage);
+            if ($page < 1) $page = 1;
+            if ($page > $totalPages && $totalPages > 0) $page = $totalPages;
+
+            $procText = "🚀 *ПРОГРАМИ ТА ВІКНА* ({$totalProcs})\n"
+                      . "───────────────────────────\n";
+            $buttons = [];
+            
+            // Standard shortcuts
+            $buttons[] = [
+                ['text' => '☄️ Browser', 'callback_data' => 'app_comet'],
+                ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
+            ];
+            $buttons[] = [
+                ['text' => '🎧 YT Music', 'callback_data' => 'app_ytmusic']
+            ];
+            
+            if (empty($procs)) {
+                $procText .= "Не знайдено відкритих вікон програм.\n";
+            } else {
+                $startIdx = ($page - 1) * $perPage;
+                $pageProcs = array_slice($procs, $startIdx, $perPage);
+                
+                foreach ($pageProcs as $idx => $p) {
+                    $cleanTitle = mb_substr(preg_replace('/[*_`\[\]\\\\]/', '', $p['title'] ?? ''), 0, 35);
+                    if (!$cleanTitle) $cleanTitle = preg_replace('/[*_`\[\]\\\\]/', '', $p['name']);
+                    $pid = (int)$p['pid'];
+                    $type = $p['type'] ?? 'window';
+                    $app_path = $p['path'] ?? '';
+                    
+                    $icon = ($type === 'pinned') ? "📌" : "💻";
+                    
+                    if ($type === 'pinned' && !empty($app_path)) {
+                         $encoded_path = base64_encode($app_path);
+                         $cb_data = "app_path_{$encoded_path}_{$pcId}";
+                         if (strlen($cb_data) > 64) {
+                             $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_{$p['name']}"]];
+                         } else {
+                             $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => $cb_data]];
+                         }
+                    } else if ($pid) {
+                        $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_pid_{$pid}"]];
+                    } else {
+                        $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_{$p['name']}"]];
+                    }
+                }
+            }
+            $procText .= "───────────────────────────\n"
+                       . "Сторінка {$page} з " . max(1, $totalPages) . "\n"
+                       . "Натисніть на програму, щоб сфокусувати її вікно.";
+            
+            $navRow = [];
+            if ($page > 1) {
+                $navRow[] = ['text' => '⬅️ Назад', 'callback_data' => "menu_apps_" . ($page - 1)];
+            }
+            if ($page < $totalPages) {
+                $navRow[] = ['text' => 'Вперед ➡️', 'callback_data' => "menu_apps_" . ($page + 1)];
+            }
+            if (!empty($navRow)) {
+                $buttons[] = $navRow;
+            }
+            
+            $buttons[] = [
+                ['text' => '🔄 Оновити список', 'callback_data' => "menu_apps_{$page}"],
+                ['text' => '« Головне меню', 'callback_data' => 'menu_main']
+            ];
+            
+            $msgIdToEdit = $targetMsgId ?: getLastMenuId($chatId);
+            $res = editOrSendMessage($chatId, $msgIdToEdit, $procText, ['inline_keyboard' => $buttons]);
+            if (isset($res['result']['message_id'])) {
+                setLastMenuId($chatId, $res['result']['message_id']);
+            }
         } else if (isset($_POST['type']) && $_POST['type'] === 'audio_devices' && isset($_POST['audio_devices_json'])) {
             $devices = json_decode($_POST['audio_devices_json'], true) ?: [];
             $menu = renderAudioDevicesMenu($devices);
@@ -1156,10 +1234,37 @@ function handleUpdate($update) {
                 telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
                 editOrSendMessage($chatId, $msgId, $statusText, getMainKeyboard($chatId));
             }
-        } elseif ($data === 'menu_apps') {
+        } elseif (strpos($data, 'menu_apps') === 0) {
+            $page = 1;
+            if (strpos($data, 'menu_apps_') === 0) {
+                $page = (int)str_replace('menu_apps_', '', $data);
+                if ($page < 1) $page = 1;
+            }
             setSearchState($chatId, false);
-            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
-            editOrSendMessage($chatId, $msgId, "🚀 *ЗАПУСК ПРОГРАМ НА ПК*\n\nЯкщо програма вже відкрита — лише фокус вікна (без нового екземпляра).", getAppsKeyboard());
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => '⏳ Отримую список програм...']);
+            
+            $pcId = getSelectedPcId($chatId);
+            if (!getSinglePcStatus($pcId)['online']) {
+                editOrSendMessage($chatId, $msgId, "🔴 ПК офлайн.", getMainKeyboard($chatId));
+            } else {
+                addCommandToQueue('get_apps', $chatId, ['msg_id' => $msgId, 'page' => $page]);
+                editOrSendMessage($chatId, $msgId, "🚀 *ЗАПУСК ПРОГРАМ НА ПК*\n⏳ Завантаження списку...\n\nЯкщо програма вже відкрита — лише фокус вікна.", getMainKeyboard($chatId));
+            }
+        } elseif (strpos($data, 'app_path_') === 0) {
+            setSearchState($chatId, false);
+            $parts = explode('_', str_replace('app_path_', '', $data));
+            $encoded_path = $parts[0];
+            $pcIdFromCb = $parts[1] ?? '';
+            $path = base64_decode($encoded_path);
+            logAction($userId, $username, "Opened pinned app path: $path");
+            addCommandToQueue('open_app', $chatId, ['path' => $path], $pcIdFromCb ? $pcIdFromCb : getSelectedPcId($chatId));
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "🚀 Запускаю програму (Панель завдань)"]);
+        } elseif (strpos($data, 'app_pid_') === 0) {
+            setSearchState($chatId, false);
+            $pidStr = str_replace('app_pid_', '', $data);
+            logAction($userId, $username, "Focused app PID: $pidStr");
+            addCommandToQueue('open_app', $chatId, ['pid' => $pidStr]);
+            telegramApi('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "🚀 Фокус вікна"]);
         } elseif (strpos($data, 'app_') === 0) {
             setSearchState($chatId, false);
             $appName = str_replace('app_', '', $data);

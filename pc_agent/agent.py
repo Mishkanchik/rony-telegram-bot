@@ -35,8 +35,10 @@ import psutil
 import datetime
 import ctypes
 import glob
+import os
 from ctypes import wintypes
 from PIL import ImageGrab
+import win32com.client
 
 # SERVER URL ON HOSTING (driver.lutsk.ua / Render)
 SERVER_URL = "https://rony-telegram-bot.onrender.com/"
@@ -368,6 +370,42 @@ def get_process_name(pid):
         return psutil.Process(pid).name().lower()
     except Exception:
         return ""
+
+def get_taskbar_apps():
+    """Gets pinned apps from TaskBar folder and currently open windows."""
+    apps = []
+    
+    # 1. Get pinned apps
+    taskbar_path = os.path.join(os.environ.get('APPDATA'), r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+    pinned_links = []
+    if os.path.exists(taskbar_path):
+        pinned_links = glob.glob(os.path.join(taskbar_path, "*.lnk"))
+        
+    pinned_names = set()
+    for lnk in pinned_links:
+        name = os.path.splitext(os.path.basename(lnk))[0]
+        pinned_names.add(name.lower())
+        apps.append({
+            "name": name,
+            "title": name,
+            "type": "pinned",
+            "path": lnk,
+            "pid": 0
+        })
+        
+    # 2. Get active visible windows
+    windows = get_active_processes()
+    for win in windows:
+        if ('name' in win and getattr(win, 'name', '') not in pinned_names) or ('name' in win and win['name'].lower().replace('.exe', '') not in pinned_names):
+             apps.append({
+                 "name": win.get("name", ""),
+                 "title": win.get("title", ""),
+                 "type": "window",
+                 "path": "",
+                 "pid": win.get("pid", 0)
+             })
+             
+    return apps
 
 def get_active_processes(limit=None):
     """
@@ -835,7 +873,7 @@ def send_online_notification():
     except Exception as e:
         print(f"[-] Failed to send online notification: {e}")
 
-def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None, audio_devices=None, page=1):
+def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None, audio_devices=None, page=1, is_apps=False):
     try:
         data = {'agent_result': '1', 'chat_id': str(chat_id), 'pc_id': PC_ID, 'pc_name': PC_NAME}
         if msg_id:
@@ -843,7 +881,7 @@ def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None
         if text:
             data['text'] = text
         if proc_list is not None:
-            data['type'] = 'processes'
+            data['type'] = 'apps' if is_apps else 'processes'
             data['procs_json'] = json.dumps(proc_list, ensure_ascii=False)
             data['page'] = page
         if audio_devices is not None:
@@ -920,6 +958,14 @@ def handle_command(cmd_item):
         except Exception as e:
             print(f"[-] get_processes error: {e}")
 
+    elif cmd_name == 'get_apps':
+        try:
+            apps = get_taskbar_apps()
+            page = params.get('page', 1)
+            send_result(chat_id, proc_list=apps, msg_id=params.get('msg_id'), page=page, is_apps=True)
+        except Exception as e:
+            print(f"[-] get_apps error: {e}")
+
     elif cmd_name == 'get_audio_devices':
         try:
             devices = get_audio_devices()
@@ -958,7 +1004,38 @@ def handle_command(cmd_item):
         focus_only = bool(params.get('focus_only', False))
         focus_existing_yt = bool(params.get('focus_existing_yt', False))
         resume_play = bool(params.get('resume_play', False))
+        target_pid = params.get('pid')
+        app_path = params.get('path')
+
         try:
+            if target_pid:
+                target_pid = int(target_pid)
+                windows = enum_windows()
+                for hwnd, title, pid in windows:
+                    if pid == target_pid:
+                        force_foreground(hwnd)
+                        print(f"[+] Focused PID {pid}: {title}")
+                        break
+                return
+                
+            if app_path and os.path.exists(app_path):
+                try:
+                    shell = win32com.client.Dispatch("WScript.Shell")
+                    shortcut = shell.CreateShortCut(app_path)
+                    target = os.path.basename(shortcut.TargetPath).lower()
+                    if target:
+                        hwnd, title, pname = find_window_by_hints(process_names=[target])
+                        if hwnd:
+                            force_foreground(hwnd)
+                            print(f"[+] Focused existing app for {target}")
+                            return
+                except Exception as e:
+                    pass
+                
+                os.startfile(app_path)
+                print(f"[+] Launched app path: {app_path}")
+                return
+
             focus_or_open_app(
                 app,
                 yt_url=yt_url,
