@@ -782,17 +782,7 @@ if (isset($_POST['agent_result'])) {
                         $app_path = $p['path'] ?? '';
                         $icon = "📌";
                         
-                        if (!empty($app_path)) {
-                            $encoded_path = base64_encode($app_path);
-                            $cb_data = "app_path_{$encoded_path}_{$pcId}";
-                            if (strlen($cb_data) > 64) {
-                                $cb = "app_{$p['name']}";
-                            } else {
-                                $cb = $cb_data;
-                            }
-                        } else {
-                            $cb = "app_{$p['name']}";
-                        }
+                        $cb = "app_{$p['name']}";
                         $rowButtons[] = ['text' => "$icon {$cleanTitle}", 'callback_data' => $cb];
                     }
                     $allFormattedRows[] = $rowButtons;

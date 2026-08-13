@@ -742,6 +742,20 @@ def focus_or_open_app(app, yt_url=None, focus_only=False, focus_existing_yt=Fals
     if hwnd:
         force_foreground(hwnd)
         return
+
+    # Check if app is a pinned link (.lnk) name in TaskBar
+    taskbar_path = os.path.join(os.environ.get('APPDATA', ''), r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+    if os.path.exists(taskbar_path):
+        for lnk in glob.glob(os.path.join(taskbar_path, "*.lnk")):
+            name = os.path.splitext(os.path.basename(lnk))[0]
+            if name.lower() == app.lower():
+                try:
+                    os.startfile(lnk)
+                    print(f"[+] Started pinned app via shortcut: {lnk}")
+                    return
+                except Exception as e:
+                    print(f"[-] Failed to start file {lnk}: {e}")
+
     if not focus_only:
         os.system(f'start "" "{app}"')
 
