@@ -738,43 +738,69 @@ if (isset($_POST['agent_result'])) {
                       . "───────────────────────────\n";
             $buttons = [];
             
-            // Standard shortcuts
-            $buttons[] = [
-                ['text' => '☄️ Browser', 'callback_data' => 'app_comet'],
-                ['text' => '✈️ Telegram', 'callback_data' => 'app_telegram']
-            ];
-            $buttons[] = [
-                ['text' => '🎧 YT Music', 'callback_data' => 'app_ytmusic']
-            ];
             
             if (empty($procs)) {
                 $procText .= "Не знайдено відкритих вікон програм.\n";
             } else {
                 $startIdx = ($page - 1) * $perPage;
-                $pageProcs = array_slice($procs, $startIdx, $perPage);
                 
-                foreach ($pageProcs as $idx => $p) {
-                    $cleanTitle = mb_substr(preg_replace('/[*_`\[\]\\\\]/', '', $p['title'] ?? ''), 0, 35);
-                    if (!$cleanTitle) $cleanTitle = preg_replace('/[*_`\[\]\\\\]/', '', $p['name']);
-                    $pid = (int)$p['pid'];
-                    $type = $p['type'] ?? 'window';
-                    $app_path = $p['path'] ?? '';
-                    
-                    $icon = ($type === 'pinned') ? "📌" : "💻";
-                    
-                    if ($type === 'pinned' && !empty($app_path)) {
-                         $encoded_path = base64_encode($app_path);
-                         $cb_data = "app_path_{$encoded_path}_{$pcId}";
-                         if (strlen($cb_data) > 64) {
-                             $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_{$p['name']}"]];
-                         } else {
-                             $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => $cb_data]];
-                         }
-                    } else if ($pid) {
-                        $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_pid_{$pid}"]];
+                $activeProcs = [];
+                $inactiveProcs = [];
+                
+                foreach ($procs as $p) {
+                    if (($p['type'] ?? '') === 'pinned' && empty($p['pid'])) {
+                        $inactiveProcs[] = $p;
                     } else {
-                        $buttons[] = [['text' => "$icon {$cleanTitle}", 'callback_data' => "app_{$p['name']}"]];
+                        $activeProcs[] = $p;
                     }
+                }
+                
+                // Pair them up left (active) and right (inactive)
+                $maxRows = max(count($activeProcs), count($inactiveProcs));
+                $allFormattedRows = [];
+                
+                for ($i = 0; $i < $maxRows; $i++) {
+                    $rowButtons = [];
+                    // Left column: Active
+                    if (isset($activeProcs[$i])) {
+                        $p = $activeProcs[$i];
+                        $cleanTitle = mb_substr(preg_replace('/[*_`\[\]\\\\]/', '', $p['title'] ?? ''), 0, 18);
+                        if (!$cleanTitle) $cleanTitle = preg_replace('/[*_`\[\]\\\\]/', '', $p['name']);
+                        $pid = (int)$p['pid'];
+                        
+                        $icon = "💻";
+                        $cb = ($pid) ? "app_pid_{$pid}" : "app_{$p['name']}";
+                        $rowButtons[] = ['text' => "$icon {$cleanTitle}", 'callback_data' => $cb];
+                    }
+                    
+                    // Right column: Inactive (pinned)
+                    if (isset($inactiveProcs[$i])) {
+                        $p = $inactiveProcs[$i];
+                        $cleanTitle = mb_substr(preg_replace('/[*_`\[\]\\\\]/', '', $p['title'] ?? ''), 0, 18);
+                        if (!$cleanTitle) $cleanTitle = preg_replace('/[*_`\[\]\\\\]/', '', $p['name']);
+                        
+                        $app_path = $p['path'] ?? '';
+                        $icon = "📌";
+                        
+                        if (!empty($app_path)) {
+                            $encoded_path = base64_encode($app_path);
+                            $cb_data = "app_path_{$encoded_path}_{$pcId}";
+                            if (strlen($cb_data) > 64) {
+                                $cb = "app_{$p['name']}";
+                            } else {
+                                $cb = $cb_data;
+                            }
+                        } else {
+                            $cb = "app_{$p['name']}";
+                        }
+                        $rowButtons[] = ['text' => "$icon {$cleanTitle}", 'callback_data' => $cb];
+                    }
+                    $allFormattedRows[] = $rowButtons;
+                }
+                
+                $pageRows = array_slice($allFormattedRows, $startIdx, $perPage);
+                foreach ($pageRows as $row) {
+                    $buttons[] = $row;
                 }
             }
             $procText .= "───────────────────────────\n"

@@ -376,35 +376,34 @@ def get_taskbar_apps():
     """Gets pinned apps from TaskBar folder and currently open windows."""
     apps = []
     
-    # 1. Get pinned apps
-    taskbar_path = os.path.join(os.environ.get('APPDATA'), r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
-    pinned_links = []
-    if os.path.exists(taskbar_path):
-        pinned_links = glob.glob(os.path.join(taskbar_path, "*.lnk"))
-        
-    pinned_names = set()
-    for lnk in pinned_links:
-        name = os.path.splitext(os.path.basename(lnk))[0]
-        pinned_names.add(name.lower())
+    # Get active visible windows
+    windows = get_active_processes()
+    active_pids = {win['pid'] for win in windows}
+    active_names = {win['name'].lower() for win in windows}
+    
+    for win in windows:
         apps.append({
-            "name": name,
-            "title": name,
-            "type": "pinned",
-            "path": lnk,
-            "pid": 0
+            "name": win.get("name", ""),
+            "title": win.get("title", ""),
+            "type": "window",
+            "path": "",
+            "pid": win.get("pid", 0)
         })
         
-    # 2. Get active visible windows
-    windows = get_active_processes()
-    for win in windows:
-        if ('name' in win and getattr(win, 'name', '') not in pinned_names) or ('name' in win and win['name'].lower().replace('.exe', '') not in pinned_names):
-             apps.append({
-                 "name": win.get("name", ""),
-                 "title": win.get("title", ""),
-                 "type": "window",
-                 "path": "",
-                 "pid": win.get("pid", 0)
-             })
+    # Get pinned apps that are not currently running
+    taskbar_path = os.path.join(os.environ.get('APPDATA'), r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+    if os.path.exists(taskbar_path):
+        pinned_links = glob.glob(os.path.join(taskbar_path, "*.lnk"))
+        for lnk in pinned_links:
+            name = os.path.splitext(os.path.basename(lnk))[0]
+            if name.lower() not in active_names:
+                apps.append({
+                    "name": name,
+                    "title": name,
+                    "type": "pinned",
+                    "path": lnk,
+                    "pid": 0
+                })
              
     return apps
 
