@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: rony-telegram-bot
+    runtime: docker
+    repo: https://github.com/Mishkanchik/rony-telegram-bot
+    plan: free
+    branch: main

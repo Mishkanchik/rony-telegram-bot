@@ -1,0 +1,7 @@
+============================================================
+⚡ RONY PC LOCAL AGENT ONLINE ⚡
+Server URL: https://rony-telegram-bot.onrender.com/
+Supports: browser_tab, browser_search, open_app(focus), media, ...
+============================================================
+[+] Online notification sent (PC_ID=pc_default, PC_NAME=Rony PC).
+[*] Executing command: reboot with params: {}
